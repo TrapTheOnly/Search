@@ -181,7 +181,7 @@ final class SpaceSwipe {
                     browser.makingSpace = true
                 } else {
                     browser.makingSpace = false
-                    browser.switchSpace(to: browser.spaces[target].id)
+                    browser.applySpace(browser.spaces[target].id)
                 }
                 browser.spaceSwipe = 0
             }

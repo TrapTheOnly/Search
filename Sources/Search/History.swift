@@ -52,6 +52,12 @@ final class History: ObservableObject {
 
     init() { load() }
 
+    /// Read the file again — another profile's list, after a switch.
+    func reload() {
+        visits = [:]
+        load()
+    }
+
     // MARK: - writing
 
     func record(_ url: URL, title: String) {

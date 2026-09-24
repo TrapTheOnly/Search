@@ -445,6 +445,7 @@ struct SideBar: View {
     /// One small door at the bottom: the settings.
     private var foot: some View {
         HStack(spacing: 2) {
+            ProfileDot(browser: browser)
             if browser.prefs.usesSpaces { SpaceDot(browser: browser) }
             ExtensionSlot(edge: .trailing)
             Door(icon: "bookmark", help: "Bookmarks") { browser.bookmarksOpen.toggle() }

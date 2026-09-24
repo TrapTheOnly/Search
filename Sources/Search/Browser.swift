@@ -763,6 +763,12 @@ final class Browser: NSObject, ObservableObject {
     private var hush: DispatchWorkItem?
     private var zoomShown = 100
     private var remembering = false
+    /// Profiles (see Profiles.swift): every one, and the one on screen.
+    /// Declared before spaces so Personal's files are the ones Spaces reads.
+    @Published var profiles = Profiles.read()
+    @Published var profileID = Store.profileID
+    /// The list behind Manage Profiles….
+    @Published var managingProfiles = false
     /// Spaces (see Spaces.swift): every one, the one on screen, and the
     /// rows of tabs of the others.
     @Published var spaces = Spaces.read() {
@@ -864,11 +870,18 @@ final class Browser: NSObject, ObservableObject {
             watchForSleep()
         }
 
-        // What a deleted space left behind, if WebKit wouldn't let it go then.
+        // What a deleted space or profile left behind, if WebKit wouldn't
+        // let it go then.
+        // Existing files in Application Support are Personal. Written once,
+        // so the list is on disk before anyone makes a second profile.
+        if !FileManager.default.fileExists(atPath: Store.folder.appendingPathComponent("profiles.json").path) {
+            Profiles.write(profiles, current: profileID)
+        }
         Spaces.sweep()
+        Profiles.sweep()
         Spaces.sharing = Set(spaces.filter { $0.sharesSignIns == true }.map(\.id))
         // The space you were in, when there are spaces (see Spaces.swift).
-        if prefs.usesSpaces, let last = Store.settings.string(forKey: "space.current").flatMap(UUID.init),
+        if prefs.usesSpaces, let last = Profiles.lastSpace(),
            spaces.contains(where: { $0.id == last }) {
             spaceID = last
             Spaces.current = last
@@ -2234,6 +2247,17 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
 
     func tab(for webView: WKWebView) -> Tab? {
         strip.first { $0.built === webView } ?? parkedTabs.first { $0.built === webView }
+    }
+
+    /// Tear the current profile's tabs down without filing them as recently
+    /// closed. Spaces park; profiles don't.
+    func resetProfileRow() {
+        for tab in strip + parkedTabs { tab.close() }
+        showRow([], active: nil)
+        parked = [:]
+        ghosts = []
+        makingSpace = false
+        spaceSwipe = 0
     }
 }
 

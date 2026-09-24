@@ -50,6 +50,10 @@ final class Extensions: NSObject, ObservableObject {
 
     let controller: WKWebExtensionController
     @Published private(set) var installed: [Installed] = []
+    /// On/off as `installed.json` first said. A profile with no overlay of
+    /// its own falls back to this, so toggling in one profile does not
+    /// rewrite every other profile's defaults.
+    private var catalogEnabled: [String: Bool] = [:]
     /// The loaded ones, by id.
     @Published private(set) var contexts: [String: WKWebExtensionContext] = [:]
     /// Bumped when any extension's button changes — icon, badge, enabled.
@@ -122,16 +126,18 @@ final class Extensions: NSObject, ObservableObject {
         super.init()
         controller.delegate = self
         installed = (try? JSONDecoder().decode([Installed].self, from: Data(contentsOf: Extensions.list))) ?? []
+        catalogEnabled = Dictionary(uniqueKeysWithValues: installed.map { ($0.id, $0.enabled) })
     }
 
     // MARK: - starting
 
     func start(for browser: Browser) {
         self.browser = browser
+        applyProfileFlags()
         controller.didOpenWindow(window)
         browser.$tabs
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] tabs in self?.follow(tabs) }
+            .sink { [weak self] _ in self?.follow(self?.visibleTabs ?? []) }
             .store(in: &bag)
         browser.$activeID
             .removeDuplicates()
@@ -172,7 +178,16 @@ final class Extensions: NSObject, ObservableObject {
     /// carry the controller; one made before the switch has no page an
     /// extension could reach.
     private func seen(_ tab: Tab) -> Bool { !tab.shy || tab.carriesExtensions }
-    var visibleTabs: [Tab] { browser?.tabs.filter(seen) ?? [] }
+
+    /// The row on screen and the ones parked in other spaces. Parked tabs
+    /// keep their views and sleep the way any idle tab does (see Sleep.swift),
+    /// so extensions still see them — discarded when asleep (no web view),
+    /// not closed. Tearing the views down would be a different product.
+    var visibleTabs: [Tab] {
+        let live = browser?.tabs.filter(seen) ?? []
+        let parked = browser?.parkedTabs.filter(seen) ?? []
+        return live + parked
+    }
 
     var activeAdapter: ExtensionTab? {
         guard let tab = browser?.active, seen(tab) else { return nil }
@@ -463,6 +478,7 @@ final class Extensions: NSObject, ObservableObject {
         )
         installed.removeAll { $0.id == id }
         installed.append(item)
+        catalogEnabled[id] = true
         save()
         if await load(item) {
             browser?.announce("\(name) is installed")
@@ -535,10 +551,33 @@ final class Extensions: NSObject, ObservableObject {
         guard let index = installed.firstIndex(where: { $0.id == id }) else { return }
         installed[index].enabled = on
         save()
+        Profiles.setExtension(id, enabled: on)
         if on {
             Task { await load(installed[index]) }
         } else {
             unload(id)
+        }
+    }
+
+    /// The profile on screen's own on/off list. Binaries stay shared; this
+    /// is which of them run here. Missing entries keep what `installed.json`
+    /// already said.
+    func applyProfile() {
+        applyProfileFlags()
+        for item in installed {
+            if item.enabled {
+                if contexts[item.id] == nil { Task { await load(item) } }
+            } else {
+                unload(item.id)
+            }
+        }
+    }
+
+    private func applyProfileFlags() {
+        let state = Profiles.extensionEnabled()
+        for index in installed.indices {
+            let id = installed[index].id
+            installed[index].enabled = state[id] ?? catalogEnabled[id] ?? installed[index].enabled
         }
     }
 
@@ -969,7 +1008,7 @@ final class ExtensionTab: NSObject, WKWebExtensionTab {
 
     func activate(for context: WKWebExtensionContext) async throws {
         guard let tab else { return }
-        browser?.select(tab)
+        browser?.reveal(tab)
     }
 
     func close(for context: WKWebExtensionContext) async throws {

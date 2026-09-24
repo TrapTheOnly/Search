@@ -236,6 +236,13 @@ struct SettingsPanel: View {
                 Switch(on: $prefs.floatsAway)
             }
             Rule()
+            Line("Profiles", "Separate identities, each with its own tabs, sign-ins, history and bookmarks. The icon at the foot of the sidebar — or before the tabs — switches.") {
+                Pill("Manage…") {
+                    browser.tuning = false
+                    browser.managingProfiles = true
+                }
+            }
+            Rule()
             Line("Let a script drive Search", "A local socket for testing. Its tabs open beside yours with a flask on them and never take over — see ./bench") {
                 Switch(on: $prefs.bench)
             }

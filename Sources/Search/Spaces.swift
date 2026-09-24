@@ -9,11 +9,12 @@ import WebKit
 // has always been and its sites use the store there has always been, so
 // turning spaces on signs nobody out.
 //
-// A space's sites live in a WebKit store of their own, made by identifier;
-// history, bookmarks, the passwords in the keychain, settings and
-// extensions are shared by every space. Switching swaps the row of tabs:
-// the ones left behind are parked, their sound paused, and they sleep
-// after half an hour as any tab does. ⌃1–⌃9 switch, as in Arc.
+// A space's sites live in a WebKit store of their own, made by identifier,
+// or the profile's store when they share sign-ins. History, bookmarks,
+// passwords and which extensions are on belong to the profile (see
+// Profiles.swift). Switching swaps the row of tabs: the ones left behind
+// are parked, their sound paused, and they sleep after half an hour as any
+// tab does. ⌃1–⌃9 switch, as in Arc.
 
 struct Space: Codable, Identifiable, Equatable {
     var id: UUID
@@ -114,9 +115,20 @@ enum Spaces {
     private static var file: URL { Store.file("spaces.json") }
 
     /// Every space, the first one first — made on the spot if there is no
-    /// list yet.
+    /// list yet. A file that's there but won't decode is set aside, the way
+    /// the session and the bookmarks are: overwriting it with a fresh
+    /// Personal is how a list actually disappears.
     static func read() -> [Space] {
-        let saved = (try? Data(contentsOf: file)).flatMap { try? JSONDecoder().decode([Space].self, from: $0) } ?? []
+        guard FileManager.default.fileExists(atPath: file.path) else {
+            return [Space(id: Space.firstID, name: "Personal", colour: 0)]
+        }
+        guard let data = try? Data(contentsOf: file) else {
+            return [Space(id: Space.firstID, name: "Personal", colour: 0)]
+        }
+        guard let saved = try? JSONDecoder().decode([Space].self, from: data) else {
+            Store.quarantine(file)
+            return [Space(id: Space.firstID, name: "Personal", colour: 0)]
+        }
         let first = saved.first(where: \.isFirst) ?? Space(id: Space.firstID, name: "Personal", colour: 0)
         return [first] + saved.filter { !$0.isFirst }
     }
@@ -137,7 +149,7 @@ enum Spaces {
     @MainActor static var sharing: Set<UUID> = []
 
     @MainActor static func store(for id: UUID) -> WKWebsiteDataStore {
-        if id == Space.firstID || sharing.contains(id) { return Store.websites }
+        if id == Space.firstID || sharing.contains(id) { return Profiles.websites }
         if let made = stores[id] { return made }
         let made = WKWebsiteDataStore(forIdentifier: id)
         stores[id] = made
@@ -204,9 +216,18 @@ extension Browser {
         return URL(fileURLWithPath: path)
     }
 
-    /// ⌃1–⌃9, and the menu on the space's dot.
+    /// ⌃1–⌃9, and the menu on the space's dot. The row carries the next
+    /// space in the way two fingers already do (see SpaceSwipe.slide).
     func switchSpace(to id: UUID) {
         guard prefs.usesSpaces else { return }
+        guard id != spaceID, let to = spaces.firstIndex(where: { $0.id == id }) else { return }
+        let here = spaces.firstIndex { $0.id == spaceID } ?? 0
+        SpaceSwipe.shared.start(for: self)
+        SpaceSwipe.shared.slide(self, to: to, from: here)
+    }
+
+    /// The swap itself, once the next row is already on screen.
+    func applySpace(_ id: UUID) {
         enter(id)
     }
 
@@ -223,9 +244,10 @@ extension Browser {
         for tab in tabs where tab.built != nil { tab.web.pauseAllMediaPlayback() }
         parked[spaceID] = Parked(tabs: tabs, active: activeID)
 
+        makingSpace = false
         spaceID = id
         Spaces.current = id
-        Store.settings.set(id.uuidString, forKey: "space.current")
+        Store.settings.set(id.uuidString, forKey: Profiles.spaceKey)
         if let back = parked.removeValue(forKey: id), !back.tabs.isEmpty {
             showRow(back.tabs, active: back.active)
             if let active, !active.wake() { active.revive() }
@@ -271,7 +293,7 @@ extension Browser {
         let made = Space(id: UUID(), name: name, colour: colour ?? freeColour, icon: icon ?? freeIcon, sharesSignIns: sharesSignIns)
         spaces.append(made)
         Spaces.write(spaces)
-        switchSpace(to: made.id)
+        applySpace(made.id)
     }
 
     /// Dragged to another place among the dots. ⌃1–⌃9 follow the order.
@@ -322,7 +344,7 @@ extension Browser {
     /// stays: it is where everything was before there were spaces.
     func deleteSpace(_ id: UUID) {
         guard id != Space.firstID, let at = spaces.firstIndex(where: { $0.id == id }) else { return }
-        if spaceID == id { switchSpace(to: Space.firstID) }
+        if spaceID == id { applySpace(Space.firstID) }
         for tab in parked.removeValue(forKey: id)?.tabs ?? [] { tab.close() }
         let shared = spaces[at].sharesSignIns == true
         spaces.remove(at: at)
@@ -331,6 +353,19 @@ extension Browser {
         // A space signed in with the others has nothing of its own to erase:
         // its cookies are theirs.
         if !shared { Spaces.erase(id) }
+    }
+
+    /// A tab parked in another space: switch to that space, then look at it.
+    /// Extensions can activate a parked tab; the sleep design keeps those
+    /// tabs around, so they have to be reachable.
+    func reveal(_ tab: Tab) {
+        if tabs.contains(where: { $0.id == tab.id }) {
+            select(tab)
+            return
+        }
+        guard let id = parked.first(where: { $0.value.tabs.contains { $0.id == tab.id } })?.key else { return }
+        applySpace(id)
+        select(tab)
     }
 
     /// Spaces turned off: back to the first one. The others are kept, in
@@ -487,6 +522,24 @@ enum SpaceMenu {
 /// The few questions a space's menu asks, as sheets on the window.
 @MainActor
 enum Ask {
+    /// A new profile's name. Its own cookies, history and bookmarks — that
+    /// is the whole of a profile, so there is nothing else to ask.
+    static func newProfile(then: @escaping (String) -> Void) {
+        let alert = NSAlert()
+        alert.messageText = "New Profile"
+        alert.informativeText = "A separate identity on this Mac: its own tabs, sign-ins, history and bookmarks."
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
+        field.placeholderString = "Work"
+        alert.accessoryView = field
+        alert.addButton(withTitle: "Create")
+        alert.addButton(withTitle: "Cancel")
+        alert.window.initialFirstResponder = field
+        show(alert) { ok in
+            let name = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            if ok, !name.isEmpty { then(name) }
+        }
+    }
+
     static func name(_ title: String, placeholder: String, initial: String = "", confirm: String, then: @escaping (String) -> Void) {
         let alert = NSAlert()
         alert.messageText = title
