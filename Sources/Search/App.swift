@@ -143,6 +143,16 @@ struct SearchApp: App {
                 Button("Stop Sound in Tab") { browser.pauseMedia() }
                     .keyboardShortcut("m", modifiers: [.command, .shift])
             }
+            CommandMenu("Profiles") {
+                ForEach(browser.profiles) { profile in
+                    Button(profile.name) {
+                        withAnimation(Motion.glide) { browser.switchProfile(to: profile.id) }
+                    }
+                }
+                Divider()
+                Button("New Profile…") { browser.askForProfile() }
+                Button("Manage Profiles…") { browser.managingProfiles = true }
+            }
             CommandMenu("Bookmarks") {
                 Button("Add This Page") { browser.bookmarkCurrent() }
                     .keyboardShortcut("b", modifiers: [.command, .shift])
@@ -445,6 +455,9 @@ struct ContentView: View {
         if browser.managing {
             sheet { PasswordsPanel(browser: browser) } close: { browser.managing = false }
         }
+        if browser.managingProfiles {
+            sheet { ProfilesPanel(browser: browser) } close: { browser.managingProfiles = false }
+        }
         if browser.reviewing {
             // No dimming for this one: the whole point is to keep looking at
             // the page while the list offers to put things back on it.
@@ -517,6 +530,7 @@ struct ContentView: View {
             .animation(Motion.settle, value: browser.welcoming)
             .animation(Motion.settle, value: browser.bookmarking)
             .animation(Motion.settle, value: browser.managing)
+            .animation(Motion.settle, value: browser.managingProfiles)
             .animation(Motion.settle, value: browser.reviewing)
         .onAppear {
             watchKeys()
@@ -826,6 +840,10 @@ struct ContentView: View {
             }
             if browser.managing {
                 browser.managing = false
+                return true
+            }
+            if browser.managingProfiles {
+                browser.managingProfiles = false
                 return true
             }
             if browser.recalling {
