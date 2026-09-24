@@ -230,6 +230,7 @@ enum Spaces {
 struct Parked {
     var tabs: [Tab]
     var active: Tab.ID?
+    var folders: [TabFolder] = []
 }
 
 extension Browser {
@@ -265,21 +266,25 @@ extension Browser {
         if !makingSpace { spaceStep = to > (spaces.firstIndex { $0.id == spaceID } ?? 0) ? 1 : -1 }
         cancelTabEdit()
         if floater.showing { land() }
+        endSplit()
+        closeGlance()
         writeSession(now: true)
 
         // The row on screen is parked as it is. Its sound stops: a space
         // you left is not one you are listening to.
         for tab in tabs where tab.built != nil { tab.web.pauseAllMediaPlayback() }
-        parked[spaceID] = Parked(tabs: Self.orderSpacePins(tabs), active: activeID)
+        parked[spaceID] = Parked(tabs: Self.orderSpacePins(tabs), active: activeID, folders: folders)
 
         makingSpace = false
         spaceID = id
         Spaces.current = id
         Store.settings.set(id.uuidString, forKey: Profiles.spaceKey)
         if let back = parked.removeValue(forKey: id), !back.tabs.isEmpty {
+            folders = back.folders
             showRow(back.tabs, active: back.active)
             if let active, !active.wake() { active.revive() }
         } else {
+            folders = []
             showRow([], active: nil)
             restoreSession()
         }

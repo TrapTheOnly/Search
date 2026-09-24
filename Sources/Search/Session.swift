@@ -11,11 +11,24 @@ enum Session {
         var pin: String?
         /// The name you gave the tab, when you gave it one.
         var name: String?
+        /// One-level folder this tab sits in, when it sits in one.
+        var folder: String?
+        /// Whether that folder is folded shut. Read from any member; they agree.
+        var collapsed: Bool?
+    }
+
+    struct Folder: Codable, Equatable {
+        var id: String
+        var name: String
+        var collapsed: Bool
     }
 
     struct Shape: Codable {
         var tabs: [Entry]
         var active: Int
+        /// Named groups in this space's strip. Missing on a session from before
+        /// folders: the entries' own folder ids are enough to rebuild them.
+        var folders: [Folder]?
         /// Pins that follow you into every space of this profile. Canonical
         /// home is the first space's `session.json`. Older builds also wrote
         /// this onto every space file; signed-out spaces no longer claim it.

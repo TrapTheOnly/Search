@@ -120,6 +120,7 @@ struct SideBar: View {
         .animation(Motion.glide, value: browser.editingTab)
         .animation(Motion.settle, value: browser.tabs.map(\.id))
         .animation(Motion.settle, value: browser.essentials.map(\.id))
+        .animation(Motion.settle, value: browser.folders.map(\.collapsed))
         .animation(Motion.settle, value: browser.pinnedCount)
         .animation(Motion.settle, value: browser.downloadsChrome)
     }
@@ -284,7 +285,7 @@ struct SideBar: View {
         let spacePins = browser.spacePins
         let essentialBlock = pinBlockHeight(count: essentials, bottomPad: spacePins > 0 ? SideBar.pinGap : 10)
         let spacePinBlock = pinBlockHeight(count: spacePins, bottomPad: 10)
-        let loose = CGFloat(browser.tabs.count - spacePins) * (SideBar.row + SideBar.gap)
+        let loose = CGFloat(visibleLooseCount + browser.folders.count) * (SideBar.row + SideBar.gap)
         return Metrics.strip + essentialBlock + spacePinBlock + loose + SideBar.row + 8
     }
 
@@ -295,6 +296,13 @@ struct SideBar: View {
         let cell = pinWidth(for: count)
         let height = min(SideBar.square, cell)
         return CGFloat(rows) * height + CGFloat(max(0, rows - 1)) * SideBar.pinGap + bottomPad
+    }
+
+    private var visibleLooseCount: Int {
+        looseTabs.filter { tab in
+            guard let id = tab.folderID, let folder = browser.folders.first(where: { $0.id == id }) else { return true }
+            return !folder.collapsed
+        }.count
     }
 
     // MARK: - the pinned squares
@@ -512,26 +520,50 @@ struct SideBar: View {
 
     private var loose: some View {
         VStack(spacing: SideBar.gap) {
-            // See the grid: the drag is measured in the column's space, not
-            // the row's, so a row that has just moved keeps its bearings.
-            ForEach(Array(looseTabs.enumerated()), id: \.element.id) { index, tab in
-                let step = SideBar.row + SideBar.gap
-                SideRow(
-                    browser: browser,
-                    prefs: prefs,
-                    tab: tab,
-                    live: tab.id == browser.activeID,
-                    pill: pill,
-                    close: { browser.close(tab) }
-                )
-                // Positions here are among the loose rows; the pinned block
-                // sits in front of them in the real list.
-                .modifier(Carried(index: index, count: looseTabs.count, step: step, vertical: true, space: "rows") {
-                    browser.move(tab, to: $0 + browser.spacePins)
-                })
+            ForEach(Array(loosePieces.enumerated()), id: \.element.id) { index, piece in
+                switch piece {
+                case .folder(let folder, let members):
+                    FolderRow(browser: browser, folder: folder, members: members) {
+                        if let tab = browser.strip.first(where: { $0.id == browser.activeID }),
+                           tab.pin == nil, !tab.essential {
+                            browser.place(tab, in: folder)
+                        }
+                    }
+                case .loose(let tab), .pin(let tab):
+                    let step = SideBar.row + SideBar.gap
+                    SideRow(
+                        browser: browser,
+                        prefs: prefs,
+                        tab: tab,
+                        live: tab.id == browser.activeID,
+                        pill: pill,
+                        close: { browser.close(tab) }
+                    )
+                    .modifier(Carried(index: index, count: loosePieces.count, step: step, vertical: true, space: "rows") { target in
+                        guard loosePieces.indices.contains(target) else { return }
+                        if case .folder(let folder, _) = loosePieces[target] {
+                            browser.place(tab, in: folder)
+                        } else if let dest = loosePieces[target].tab,
+                                  let at = browser.tabs.firstIndex(where: { $0.id == dest.id }) {
+                            browser.move(tab, to: at)
+                        }
+                    })
+                case .essential:
+                    EmptyView()
+                }
             }
         }
         .coordinateSpace(name: "rows")
+    }
+
+    /// Folder headers and visible loose tabs for the column (pins stay in the grid).
+    private var loosePieces: [StripPiece] {
+        browser.spaceShownPieces.filter {
+            switch $0 {
+            case .loose, .folder: return true
+            default: return false
+            }
+        }
     }
 
     /// The loose tabs and the row that makes another, which scroll as one.
