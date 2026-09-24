@@ -86,7 +86,12 @@ struct SideBar: View {
         // Rows on their way to or from another space stay in the column.
         .clipped()
         .onAppear { SpaceSwipe.shared.start(for: browser) }
-        .background(landing ? Palette.hover : Palette.ground)
+        .background {
+            ZStack {
+                ChromeFill(colour: browser.prefs.usesSpaces ? browser.space.colour : nil)
+                if landing { Palette.hover }
+            }
+        }
         .overlay(alignment: .trailing) {
             Rectangle().fill(Palette.hairline).frame(width: 1)
         }
@@ -95,6 +100,8 @@ struct SideBar: View {
             browser.take(providers)
         }
         .animation(Motion.quick, value: landing)
+        .animation(Motion.quick, value: browser.space.colour)
+        .animation(Motion.quick, value: browser.spaceID)
         .animation(Motion.glide, value: browser.activeID)
         .animation(Motion.glide, value: browser.editingTab)
         .animation(Motion.settle, value: browser.tabs.map(\.id))

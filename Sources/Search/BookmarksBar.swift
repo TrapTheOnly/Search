@@ -31,7 +31,8 @@ struct BookmarksBar: View {
         }
         .frame(height: BookmarksBar.height)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Palette.ground)
+        .background(ChromeFill(colour: browser.prefs.usesSpaces ? browser.space.colour : nil))
+        .animation(Motion.quick, value: browser.space.colour)
         .overlay(alignment: .bottom) {
             Rectangle().fill(Palette.hairline).frame(height: 1)
         }
