@@ -58,6 +58,23 @@ enum Engine: String, CaseIterable, Identifiable {
         charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~"
     )
 
+    /// Extra engines, each with an optional keyword. "wiki query" uses that
+    /// engine; a bare query still uses the default.
+    static func search(for text: String, extras: [ExtraEngine], defaultTemplate: String) -> URL? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        if let space = trimmed.firstIndex(of: " ") {
+            let word = String(trimmed[..<space])
+            let rest = String(trimmed[trimmed.index(after: space)...])
+            if !word.isEmpty, !rest.isEmpty,
+               let extra = extras.first(where: { $0.keyword == word }),
+               Engine.accepts(extra.template) {
+                return url(for: rest, template: extra.template)
+            }
+        }
+        return url(for: trimmed, template: defaultTemplate)
+    }
+
     private static func host(of template: String) -> String? {
         let trimmed = template.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.contains("%s"),
@@ -68,4 +85,13 @@ enum Engine: String, CaseIterable, Identifiable {
         else { return nil }
         return host.lowercased()
     }
+}
+
+/// Another engine, kept in prefs: a name, a template, and an optional
+/// keyword for the field.
+struct ExtraEngine: Codable, Identifiable, Equatable {
+    var id: UUID
+    var name: String
+    var template: String
+    var keyword: String
 }

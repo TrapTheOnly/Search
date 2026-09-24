@@ -254,6 +254,12 @@ final class Tab: ObservableObject, Identifiable {
     /// at the head of the row and gives up its title for that letter — which
     /// is all you need for the five or six pages you keep open all day.
     @Published var pin: String?
+    /// The address the pin (or essential) was made at. Reset Pin comes back here.
+    var pinURL: URL?
+    /// A pin that stays visible in every space.
+    @Published var essential = false
+    /// One-level folder this tab sits in, when it sits in one.
+    @Published var folderID: UUID?
 
     /// A name you gave it, in place of whatever the page calls itself. It
     /// stays through navigation: a tab you named is a tab you are keeping for

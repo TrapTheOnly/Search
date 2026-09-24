@@ -102,6 +102,7 @@ struct SideBar: View {
         .animation(Motion.glide, value: browser.editingTab)
         .animation(Motion.settle, value: browser.tabs.map(\.id))
         .animation(Motion.settle, value: browser.pinnedCount)
+        .animation(Motion.settle, value: browser.folders.map(\.collapsed))
     }
 
     /// The column's edge: pull it to make the column wider or narrower,
@@ -252,14 +253,20 @@ struct SideBar: View {
         let pinRows = pins == 0 ? 0 : (pins + cols - 1) / cols
         let pinBlock = pinRows == 0 ? 0
             : CGFloat(pinRows) * pinHeight + CGFloat(pinRows - 1) * SideBar.pinGap + 10
-        let loose = CGFloat(browser.tabs.count - pins) * (SideBar.row + SideBar.gap)
+        let loose = CGFloat(looseTabs.count + browser.folders.count) * (SideBar.row + SideBar.gap)
         return Metrics.strip + pinBlock + loose + SideBar.row + 8
     }
 
     // MARK: - the pinned squares
 
-    private var pinnedTabs: [Tab] { browser.tabs.filter { $0.pin != nil } }
-    private var looseTabs: [Tab] { browser.tabs.filter { $0.pin == nil } }
+    private var pinnedTabs: [Tab] { browser.essentials + browser.tabs.filter { $0.pin != nil } }
+    private var looseTabs: [Tab] {
+        browser.tabs.filter { tab in
+            guard tab.pin == nil else { return false }
+            guard let id = tab.folderID, let folder = browser.folders.first(where: { $0.id == id }) else { return true }
+            return !folder.collapsed
+        }
+    }
 
     /// Three columns is the block's own shape — up to six pins, that's two
     /// full rows, and one or two is just those same three places with a
@@ -373,7 +380,7 @@ struct SideBar: View {
                 let target = pinTarget(from: pinFrom, moved: pinDelta(columns: columns, stepX: stepX, stepY: stepY))
                 if target != index {
                     withAnimation(Motion.settle) {
-                        browser.move(tab, to: target)
+                        browser.movePin(tab, to: target)
                     }
                 }
             }
@@ -389,29 +396,37 @@ struct SideBar: View {
 
     private var loose: some View {
         VStack(spacing: SideBar.gap) {
-            // See the grid: the drag is measured in the column's space, not
-            // the row's, so a row that has just moved keeps its bearings.
-            ForEach(Array(looseTabs.enumerated()), id: \.element.id) { index, tab in
+            ForEach(Array(browser.shownPieces.filter {
+                if case .essential = $0 { return false }
+                if case .pin = $0 { return false }
+                return true
+            }.enumerated()), id: \.element.id) { index, piece in
                 let step = SideBar.row + SideBar.gap
-                let held = dragging == tab.id
-                SideRow(
-                    browser: browser,
-                    prefs: prefs,
-                    tab: tab,
-                    live: tab.id == browser.activeID,
-                    pill: pill,
-                    close: { browser.close(tab) }
-                )
-                .offset(y: held ? travel - CGFloat(index - from) * step : 0)
-                // Under the hand exactly. Its place in the row springs when it
-                // passes another tab, and the offset springs back the same way —
-                // until the next move of the hand cuts the offset's spring short
-                // and leaves the place's running: the tab jumped a whole slot and
-                // drifted back each time it passed one. Only the others glide.
-                .transaction { if held { $0.animation = nil } }
-                .zIndex(held ? 1 : 0)
-                .shadow(color: .black.opacity(held ? 0.14 : 0), radius: 12, y: 4)
-                .gesture(reorder(tab: tab, index: index, step: step))
+                switch piece {
+                case .folder(let folder, let members):
+                    FolderRow(browser: browser, folder: folder, members: members) {
+                        if let id = dragging, let tab = browser.find(id) {
+                            browser.place(tab, in: folder)
+                        }
+                    }
+                case .loose(let tab):
+                    let held = dragging == tab.id
+                    SideRow(
+                        browser: browser,
+                        prefs: prefs,
+                        tab: tab,
+                        live: tab.id == browser.activeID,
+                        pill: pill,
+                        close: { browser.close(tab) }
+                    )
+                    .offset(y: held ? travel - CGFloat(index - from) * step : 0)
+                    .transaction { if held { $0.animation = nil } }
+                    .zIndex(held ? 1 : 0)
+                    .shadow(color: .black.opacity(held ? 0.14 : 0), radius: 12, y: 4)
+                    .gesture(reorder(tab: tab, index: index, step: step))
+                default:
+                    EmptyView()
+                }
             }
         }
         .coordinateSpace(name: "rows")
@@ -427,12 +442,13 @@ struct SideBar: View {
                 }
                 travel = value.translation.height
                 let moved = Int((travel / step).rounded())
-                let target = min(max(0, from + moved), looseTabs.count - 1)
-                if target != index {
-                    // Positions here are among the loose rows; the pinned
-                    // block sits in front of them in the real list.
-                    withAnimation(Motion.settle) {
-                        browser.move(tab, to: target + browser.pinnedCount)
+                let target = min(max(0, from + moved), max(0, looseTabs.count - 1))
+                if target != index, looseTabs.indices.contains(target) {
+                    let dest = looseTabs[target]
+                    if let folderID = dest.folderID, let folder = browser.folders.first(where: { $0.id == folderID }) {
+                        withAnimation(Motion.settle) { browser.place(tab, in: folder) }
+                    } else if let at = browser.tabs.firstIndex(where: { $0.id == dest.id }) {
+                        withAnimation(Motion.settle) { browser.move(tab, to: at) }
                     }
                 }
             }

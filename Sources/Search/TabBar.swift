@@ -60,35 +60,9 @@ struct TabBar: View {
                             ScrollViewReader { reader in
                                 ScrollView(.horizontal, showsIndicators: false) {
                                     HStack(spacing: Metrics.tabGap) {
-                                        ForEach(Array(browser.tabs.enumerated()), id: \.element.id) { index, tab in
-                                            // A pinned square moves among pinned squares, a title
-                                            // among titles: each has its own stride.
-                                            let step = (tab.pin != nil ? Metrics.pinWidth : width(in: geo.size.width)) + Metrics.tabGap
-                                            let held = dragging == tab.id
-                                            TabPill(
-                                                browser: browser,
-                                                prefs: browser.prefs,
-                                                tab: tab,
-                                                live: tab.id == browser.activeID,
-                                                width: width(in: geo.size.width),
-                                                room: geo.size.width - Metrics.lights - 12,
-                                                pill: pill,
-                                                close: { browser.close(tab) }
-                                            )
-                                            // The row reflows around it while the pill itself keeps
-                                            // up with the hand: what it has travelled, less the
-                                            // ground its new place has already given it.
-                                            .offset(x: held ? travel - CGFloat(index - from) * step : 0)
-                                            // Under the hand exactly. Its place in the row springs when it
-                                            // passes another tab, and the offset springs back the same way —
-                                            // until the next move of the hand cuts the offset's spring short
-                                            // and leaves the place's running: the tab jumped a whole slot and
-                                            // drifted back each time it passed one. Only the others glide.
-                                            .transaction { if held { $0.animation = nil } }
-                                            .zIndex(held ? 1 : 0)
-                                            .shadow(color: .black.opacity(held ? 0.14 : 0), radius: 12, y: 4)
-                                            .gesture(reorder(tab: tab, index: index, step: step))
-                                            .id(tab.id)
+                                        ForEach(Array(browser.shownPieces.enumerated()), id: \.element.id) { index, piece in
+                                            stripItem(piece, index: index, width: width(in: geo.size.width), room: geo.size.width - Metrics.lights - 12)
+                                                .id(piece.id)
                                         }
                                     }
                                     .frame(height: Metrics.strip)
@@ -182,6 +156,7 @@ struct TabBar: View {
         // and the tabs appeared to jump aside.
         .animation(Motion.glide, value: browser.editingTab)
         .animation(Motion.settle, value: browser.tabs.map(\.id))
+        .animation(Motion.settle, value: browser.folders.map(\.collapsed))
     }
 
     // MARK: - the spaces, one above the other
@@ -206,11 +181,12 @@ struct TabBar: View {
         } else {
             let space = browser.spaces[index]
             let row = space.id == browser.spaceID
-                ? Parked(tabs: browser.tabs, active: browser.activeID)
+                ? Parked(tabs: browser.tabs, active: browser.activeID, folders: browser.folders)
                 : browser.parked[space.id] ?? Parked(tabs: [], active: nil)
-            let each = width(in: strip, pinned: row.tabs.filter { $0.pin != nil }.count, count: row.tabs.count)
+            let shown = browser.essentials + row.tabs
+            let each = width(in: strip, pinned: shown.filter { $0.pin != nil }.count, count: shown.count)
             HStack(spacing: Metrics.tabGap) {
-                ForEach(row.tabs) { tab in
+                ForEach(shown) { tab in
                     TabPill(
                         browser: browser,
                         prefs: browser.prefs,
@@ -228,6 +204,36 @@ struct TabBar: View {
         }
     }
 
+    @ViewBuilder
+    private func stripItem(_ piece: StripPiece, index: Int, width: CGFloat, room: CGFloat) -> some View {
+        switch piece {
+        case .essential(let tab), .pin(let tab), .loose(let tab):
+            let step = (tab.pin != nil || tab.essential ? Metrics.pinWidth : width) + Metrics.tabGap
+            let held = dragging == tab.id
+            TabPill(
+                browser: browser,
+                prefs: browser.prefs,
+                tab: tab,
+                live: tab.id == browser.activeID,
+                width: width,
+                room: room,
+                pill: pill,
+                close: { browser.close(tab) }
+            )
+            .offset(x: held ? travel - CGFloat(index - from) * step : 0)
+            .transaction { if held { $0.animation = nil } }
+            .zIndex(held ? 1 : 0)
+            .shadow(color: .black.opacity(held ? 0.14 : 0), radius: 12, y: 4)
+            .gesture(reorder(tab: tab, index: index, step: step))
+        case .folder(let folder, let members):
+            FolderChip(browser: browser, folder: folder, members: members, width: min(140, max(72, width))) {
+                if let id = dragging, let tab = browser.find(id) {
+                    browser.place(tab, in: folder)
+                }
+            }
+        }
+    }
+
     /// Pick a tab up and the others get out of its way as it passes them.
     private func reorder(tab: Tab, index: Int, step: CGFloat) -> some Gesture {
         // In the row's space, not the pill's — see the sidebar's grid for why.
@@ -239,9 +245,18 @@ struct TabBar: View {
                 }
                 travel = value.translation.width
                 let moved = Int((travel / step).rounded())
-                let target = min(max(0, from + moved), browser.tabs.count - 1)
-                if target != index {
-                    withAnimation(Motion.settle) { browser.move(tab, to: target) }
+                let pieces = browser.shownPieces
+                let target = min(max(0, from + moved), max(0, pieces.count - 1))
+                if target != index, pieces.indices.contains(target) {
+                    if case .folder(let folder, _) = pieces[target] {
+                        withAnimation(Motion.settle) { browser.place(tab, in: folder) }
+                    } else if let dest = pieces[target].tab {
+                        if tab.essential || dest.essential {
+                            withAnimation(Motion.settle) { browser.movePin(tab, to: target) }
+                        } else if let at = browser.tabs.firstIndex(where: { $0.id == dest.id }) {
+                            withAnimation(Motion.settle) { browser.move(tab, to: at) }
+                        }
+                    }
                 }
             }
             .onEnded { _ in
@@ -281,13 +296,23 @@ struct TabBar: View {
     private func content(in strip: CGFloat) -> CGFloat {
         let each = width(in: strip)
         let pinned = CGFloat(browser.pinnedCount)
-        let loose = CGFloat(browser.tabs.count) - pinned
-        var total = pinned * Metrics.pinWidth + loose * each
-            + CGFloat(max(0, browser.tabs.count - 1)) * Metrics.tabGap
-        if let id = browser.editingTab, let tab = browser.tabs.first(where: { $0.id == id }) {
-            total += min(340, strip - Metrics.lights - 12) - (tab.pin != nil ? Metrics.pinWidth : each)
+        let hidden = collapsedCount
+        let headers = CGFloat(browser.folders.count)
+        let loose = CGFloat(browser.tabs.count - browser.spacePins - hidden)
+        let count = Int(pinned + loose + headers)
+        var total = pinned * Metrics.pinWidth + headers * min(140, max(72, each)) + loose * each
+            + CGFloat(max(0, count - 1)) * Metrics.tabGap
+        if let id = browser.editingTab, let tab = browser.strip.first(where: { $0.id == id }) {
+            total += min(340, strip - Metrics.lights - 12) - (tab.pin != nil || tab.essential ? Metrics.pinWidth : each)
         }
         return total
+    }
+
+    private var collapsedCount: Int {
+        browser.tabs.filter { tab in
+            guard let id = tab.folderID, let folder = browser.folders.first(where: { $0.id == id }) else { return false }
+            return folder.collapsed
+        }.count
     }
 
     /// The strip, less the lights, the plus, the doors at the far end and
@@ -307,7 +332,8 @@ struct TabBar: View {
     /// mark and its air. Past that, the run scrolls. The pinned squares take
     /// their room off the top.
     private func width(in strip: CGFloat) -> CGFloat {
-        width(in: strip, pinned: browser.pinnedCount, count: browser.tabs.count)
+        let visible = browser.essentials.count + browser.tabs.count - collapsedCount + browser.folders.count
+        return width(in: strip, pinned: browser.pinnedCount, count: visible)
     }
 
     private func width(in strip: CGFloat, pinned pins: Int, count: Int) -> CGFloat {
@@ -723,6 +749,46 @@ struct TabMenu: View {
         } else {
             Button("Change Letter") { browser.editLetter(tab) }
             Button("Unpin") { browser.unpin(tab) }
+        }
+        if tab.essential {
+            Button("Remove from Essentials") { browser.removeEssential(tab) }
+        } else {
+            Button("Make Essential") { browser.makeEssential(tab) }
+                .disabled(tab.isBlank)
+        }
+        Button("Reset Pin") { browser.resetPin(tab) }
+            .disabled(tab.pinURL == nil)
+        Button("Glance") { browser.glance(tab) }
+            .disabled(tab.isBlank)
+        Button("Split to the Side") { browser.splitAside(tab) }
+            .disabled(tab.isBlank && browser.strip.count < 2)
+        if browser.prefs.usesSpaces {
+            Menu("Move to Space") {
+                ForEach(browser.spaces) { space in
+                    Button(space.name) { browser.move(tab, toSpace: space.id) }
+                        .disabled(space.id == browser.spaceID || tab.essential)
+                }
+            }
+            Menu("Always open this site in…") {
+                ForEach(browser.spaces) { space in
+                    Button(space.name) { browser.alwaysOpen(tab, in: space.id) }
+                        .disabled(tab.isBlank)
+                }
+            }
+        }
+        if tab.pin == nil {
+            Button("New Folder") { browser.newFolder(around: tab) }
+                .disabled(tab.isBlank)
+            if !browser.folders.isEmpty {
+                Menu("Add to Folder") {
+                    ForEach(browser.folders) { folder in
+                        Button(folder.name) { browser.place(tab, in: folder) }
+                    }
+                }
+            }
+            if tab.folderID != nil {
+                Button("Remove from Folder") { browser.removeFromFolder(tab) }
+            }
         }
         Divider()
         Button("Rename") { browser.beginTabRename(tab) }

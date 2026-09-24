@@ -61,6 +61,18 @@ final class Preferences: ObservableObject {
     @Published var customEngine: String {
         didSet { store.set(customEngine, forKey: "search.custom") }
     }
+    /// Extra engines with optional keywords, next to the default.
+    @Published var engines: [ExtraEngine] {
+        didSet { store.set(PrefsJSON.encode(engines), forKey: "search.engines") }
+    }
+    /// Host → space id. An http(s) link to that host opens in that space.
+    @Published var routes: [String: String] {
+        didSet { store.set(PrefsJSON.encode(routes), forKey: "space.routes") }
+    }
+    /// Command id → stroke. Missing means the default still fires.
+    @Published var shortcutOverrides: [String: Stroke] {
+        didSet { store.set(PrefsJSON.encode(shortcutOverrides), forKey: "keys.overrides") }
+    }
     /// Tabs nobody has looked at for half an hour give their page back and
     /// keep where they were. On unless turned off.
     @Published var sleepsTabs: Bool {
@@ -162,6 +174,9 @@ final class Preferences: ObservableObject {
         glyph = store.string(forKey: "glyph").flatMap(Glyph.init) ?? .letters
         engine = store.string(forKey: "search.engine").flatMap(Engine.init) ?? .standard
         customEngine = store.string(forKey: "search.custom") ?? ""
+        engines = PrefsJSON.decode(store.data(forKey: "search.engines"), as: [ExtraEngine].self) ?? []
+        routes = PrefsJSON.decode(store.data(forKey: "space.routes"), as: [String: String].self) ?? [:]
+        shortcutOverrides = PrefsJSON.decode(store.data(forKey: "keys.overrides"), as: [String: Stroke].self) ?? [:]
         sleepsTabs = store.object(forKey: "tabs.sleep") as? Bool ?? true
         showsReading = store.object(forKey: "tabs.reading") as? Bool ?? true
         shielded = store.object(forKey: "shield") as? Bool ?? true
@@ -221,5 +236,18 @@ final class Preferences: ObservableObject {
         defaults.set(autocorrect, forKey: "WebAutomaticSpellingCorrectionEnabled")
         defaults.set(false, forKey: "WebAutomaticQuoteSubstitutionEnabled")
         defaults.set(false, forKey: "WebAutomaticDashSubstitutionEnabled")
+    }
+}
+
+/// Small JSON blobs in the settings file. Written only when the list changes,
+/// never on a keystroke.
+enum PrefsJSON {
+    static func encode<T: Encodable>(_ value: T) -> Data? {
+        try? JSONEncoder().encode(value)
+    }
+
+    static func decode<T: Decodable>(_ data: Data?, as type: T.Type) -> T? {
+        guard let data else { return nil }
+        return try? JSONDecoder().decode(type, from: data)
     }
 }

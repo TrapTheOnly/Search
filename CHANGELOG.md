@@ -13,6 +13,18 @@ in [ROADMAP.md](ROADMAP.md).
 
 ### Added
 
+- Glance: Option-click a link, or Glance in a tab's menu, opens it over the page you are on. Close it, open it as a tab, or split it to the side. The peek is never written to the session.
+- Split view: two tabs side by side in the one window, from Glance or Split to the Side. Closing a pane puts one page back.
+- Essentials: a pin that stays in every space, above that space's own tabs. Ordinary pins stay where they are.
+- Folders: one named group in the tab strip. Drag a tab in, rename, delete. No nesting.
+- Space routing: always open a site in a given space. External links and navigations follow it.
+- Your own keyboard shortcuts, in Settings › Shortcuts. Conflicts are marked. Defaults stay until you change them.
+- ⌃Tab walks the tabs you used last, not only the row. Hold it for a list of titles.
+- Search keywords: extra engines next to Search with, each with an optional keyword. `wiki query` uses that engine; a bare query still uses the default.
+- Reset Pin: a pinned or essential tab remembers the address it was pinned at, and a menu item puts it back.
+- ⌘K still searches open tabs, and now lists a few actions — new tab, split, fold, restore a session copy.
+- Session copies: each time the session is written, a dated copy is kept beside it, five at most, and Settings or ⌘K can put one back.
+
 - Spaces with the tabs across the top: two fingers up or down over the bar, or a notch of a mouse wheel, bring the next space's tabs in as these go; past the last, a new space is made right in the bar. "New Space…" makes it in place in the column too.
 - Reopen Closed Tab is in the right-click menu of every tab, in the row and in the column, beside Close Other Tabs; it was only on ⌘⇧T and in the History menu. Thanks [@andupoto](https://x.com/andupoto) for asking
 - Extensions on private tabs, if you allow them: Settings › Extensions › Allow on private tabs, off by default. It applies to private tabs opened after it is turned on. Thanks [@merttopuz](https://github.com/merttopuz) ([#55](https://github.com/driceroland/Search/pull/55))

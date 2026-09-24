@@ -145,6 +145,7 @@ enum Spaces {
 struct Parked {
     var tabs: [Tab]
     var active: Tab.ID?
+    var folders: [TabFolder] = []
 }
 
 extension Browser {
@@ -176,15 +177,17 @@ extension Browser {
         // The row on screen is parked as it is. Its sound stops: a space
         // you left is not one you are listening to.
         for tab in tabs where tab.built != nil { tab.web.pauseAllMediaPlayback() }
-        parked[spaceID] = Parked(tabs: tabs, active: activeID)
+        parked[spaceID] = Parked(tabs: tabs, active: activeID, folders: folders)
 
         spaceID = id
         Spaces.current = id
         Store.settings.set(id.uuidString, forKey: "space.current")
         if let back = parked.removeValue(forKey: id), !back.tabs.isEmpty {
+            folders = back.folders
             showRow(back.tabs, active: back.active)
             if let active, !active.wake() { active.revive() }
         } else {
+            folders = []
             showRow([], active: nil)
             restoreSession()
         }
@@ -266,6 +269,7 @@ extension Browser {
     func deleteSpace(_ id: UUID) {
         guard id != Space.firstID, let at = spaces.firstIndex(where: { $0.id == id }) else { return }
         if spaceID == id { switchSpace(to: Space.firstID) }
+        prefs.routes = prefs.routes.filter { $0.value != id.uuidString }
         for tab in parked.removeValue(forKey: id)?.tabs ?? [] { tab.close() }
         let shared = spaces[at].sharesSignIns == true
         spaces.remove(at: at)

@@ -12,6 +12,8 @@ struct Suggestion: Identifiable, Equatable {
     let kind: Kind
     /// Set when this is a page you already have open somewhere.
     var tab: UUID?
+    /// Set when this is a command in the ⌘K list.
+    var action: String?
 
     enum Kind {
         /// A page that is open right now.
@@ -22,9 +24,11 @@ struct Suggestion: Identifiable, Equatable {
         case known
         /// Not a place at all — words, and an engine to ask.
         case search
+        /// Something the browser can do, from the command bar.
+        case command
     }
 
-    var id: String { key }
+    var id: String { action.map { "cmd-\($0)" } ?? key }
 }
 
 private struct Visit: Codable {

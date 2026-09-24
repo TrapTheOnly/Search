@@ -15,12 +15,13 @@ struct SettingsPanel: View {
     @State private var page: Page = Page(rawValue: Store.settings.string(forKey: "settings.page") ?? "") ?? .general
 
     enum Page: String, CaseIterable, Identifiable {
-        case general, tabs, extensions, passwords, downloads, privacy, about
+        case general, tabs, shortcuts, extensions, passwords, downloads, privacy, about
         var id: String { rawValue }
         var title: String {
             switch self {
             case .general: return "General"
             case .tabs: return "Tabs"
+            case .shortcuts: return "Shortcuts"
             case .extensions: return "Extensions"
             case .passwords: return "Passwords"
             case .downloads: return "Downloads"
@@ -32,6 +33,7 @@ struct SettingsPanel: View {
             switch self {
             case .general: return "macwindow"
             case .tabs: return "rectangle.split.3x1"
+            case .shortcuts: return "keyboard"
             case .extensions: return "puzzlepiece.extension"
             case .passwords: return "key"
             case .downloads: return "arrow.down.circle"
@@ -133,6 +135,7 @@ struct SettingsPanel: View {
                     switch page {
                     case .general: general
                     case .tabs: tabs
+                    case .shortcuts: shortcuts
                     case .extensions: ExtensionsPage(browser: browser)
                     case .passwords: passwords
                     case .downloads: downloads
@@ -199,6 +202,41 @@ struct SettingsPanel: View {
                 .padding(.horizontal, 14)
                 .padding(.bottom, 11)
             }
+            ForEach($prefs.engines) { $engine in
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 8) {
+                        TextField("Keyword", text: $engine.keyword)
+                            .textFieldStyle(.plain)
+                            .frame(width: 72)
+                        TextField("Name", text: $engine.name)
+                            .textFieldStyle(.plain)
+                        Button {
+                            prefs.engines.removeAll { $0.id == engine.id }
+                        } label: {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 9, weight: .semibold))
+                                .foregroundStyle(Palette.muted)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    TextField("https://example.com/search?q=%s", text: $engine.template)
+                        .textFieldStyle(.plain)
+                }
+                .font(.system(size: 12.5))
+                .foregroundStyle(Palette.ink)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+                .background(Palette.wash, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                .padding(.horizontal, 14)
+            }
+            HStack {
+                Spacer()
+                Pill("Add engine") {
+                    prefs.engines.append(ExtraEngine(id: UUID(), name: "", template: "", keyword: ""))
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.bottom, 11)
             Rule()
             Line("Appearance", "Light, dark, or whatever the Mac is doing — pages follow it too") {
                 Segmented(options: Look.allCases.map { ($0, $0.title) }, selection: $prefs.look)
@@ -257,6 +295,43 @@ struct SettingsPanel: View {
             Rule()
             Line("Spaces", "Separate sets of tabs, signed in where the others are or starting afresh, switched with ⌃1–⌃9, two fingers sideways over the column, or the space's icon. Mission Control's own ⌃1–⌃9, if you turned them on, take those keys first.") {
                 Switch(on: $prefs.usesSpaces)
+            }
+            Rule()
+            Line("Session copies", "A dated copy each time the session is written, five at most, on this Mac") {
+                EmptyView()
+            }
+            ForEach(Session.copies(space: browser.spaceID)) { copy in
+                Line(copy.date.formatted(date: .abbreviated, time: .shortened), "Replaces the tabs open now") {
+                    Pill("Restore…") { browser.confirmRestore(copy) }
+                }
+            }
+        }
+    }
+
+    private var shortcuts: some View {
+        let clash = Keys.conflicts(overrides: prefs.shortcutOverrides)
+        return Card {
+            ForEach(Array(Keys.catalog.enumerated()), id: \.element.id) { index, command in
+                if index > 0 { Rule() }
+                let stroke = Keys.stroke(for: command.id, overrides: prefs.shortcutOverrides) ?? command.stroke
+                Line(command.title, clash.contains(command.id) ? "This key is used twice" : (prefs.shortcutOverrides[command.id] == nil ? nil : "Changed from \(command.stroke.label)")) {
+                    HStack(spacing: 8) {
+                        if prefs.shortcutOverrides[command.id] != nil {
+                            Pill("Reset") { prefs.shortcutOverrides[command.id] = nil }
+                        }
+                        Button {
+                            browser.recordingShortcut = command.id
+                        } label: {
+                            Text(browser.recordingShortcut == command.id ? "Type a key…" : stroke.label)
+                                .font(.system(size: 12, design: .rounded))
+                                .foregroundStyle(clash.contains(command.id) ? Color.red.opacity(0.8) : Palette.ink)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 5)
+                                .background(Palette.wash, in: Capsule())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
             }
         }
     }

@@ -122,6 +122,20 @@ struct SearchApp: App {
                         Button("Change Letter") { browser.editLetter(tab) }
                         Button("Unpin Tab") { browser.unpin(tab) }
                     }
+                    if tab.essential {
+                        Button("Remove from Essentials") { browser.removeEssential(tab) }
+                    } else {
+                        Button("Make Essential") { browser.makeEssential(tab) }
+                            .disabled(tab.isBlank)
+                    }
+                    Button("Reset Pin") { browser.resetPin(tab) }
+                        .disabled(tab.pinURL == nil)
+                    Button("Glance") { browser.glance(tab) }
+                        .disabled(tab.isBlank)
+                    Button(browser.splitID == nil ? "Split to the Side" : "End Split") {
+                        if browser.splitID == nil { browser.splitAside(tab) } else { browser.endSplit() }
+                    }
+                    .disabled(tab.isBlank && browser.splitID == nil)
                 }
                 Button("Rename Tab") { if let tab = browser.active { browser.beginTabRename(tab) } }
                     .disabled(browser.active == nil)
@@ -248,25 +262,29 @@ struct ContentView: View {
                     // and it costs a compositing pass.
                     Color.clear.frame(height: band)
 
-                    // One stage, always.
-                    if let tab = browser.active {
-                        Page(tab: tab)
-                            .overlay(alignment: .topTrailing) {
-                                if browser.finding {
-                                    FindBar(browser: browser)
-                                        .transition(.move(edge: .top).combined(with: .opacity))
-                                }
-                            }
-                            .overlay(alignment: .topLeading) {
-                                if let asked = browser.suggesting, asked.tab == tab.id {
-                                    AccountList(browser: browser, asked: asked)
-                                        .transition(.opacity)
-                                }
-                            }
-                            .animation(Motion.quick, value: browser.suggesting)
-                    } else {
-                        Palette.ground
+                    // One stage, or two when a pair of tabs sit side by side.
+                    Group {
+                        if let tab = browser.active, let mate = browser.splitMate, mate.id != tab.id {
+                            SplitStage(browser: browser, left: tab, right: mate)
+                        } else if let tab = browser.active {
+                            Page(tab: tab)
+                        } else {
+                            Palette.ground
+                        }
                     }
+                    .overlay(alignment: .topTrailing) {
+                        if browser.finding {
+                            FindBar(browser: browser)
+                                .transition(.move(edge: .top).combined(with: .opacity))
+                        }
+                    }
+                    .overlay(alignment: .topLeading) {
+                        if let asked = browser.suggesting, asked.tab == browser.activeID {
+                            AccountList(browser: browser, asked: asked)
+                                .transition(.opacity)
+                        }
+                    }
+                    .animation(Motion.quick, value: browser.suggesting)
                 }
             }
 
@@ -277,6 +295,7 @@ struct ContentView: View {
         }
         .ignoresSafeArea()
         .animation(Motion.glide, value: browser.prefs.sidebar)
+        .animation(Motion.glide, value: browser.splitID)
         .animation(.easeOut(duration: 0.12), value: browser.active?.immersed)
     }
 
@@ -367,6 +386,18 @@ struct ContentView: View {
             .overlay(alignment: .bottom) { bars }
             .overlay { field }
             .overlay { panels }
+            .overlay {
+                if let glance = browser.glance {
+                    GlanceCard(browser: browser, glance: glance)
+                }
+            }
+            .overlay {
+                if browser.switching {
+                    SwitcherCard(browser: browser)
+                }
+            }
+            .animation(Motion.settle, value: browser.glance != nil)
+            .animation(Motion.settle, value: browser.switching)
             .animation(Motion.settle, value: browser.fieldShowing)
             .background(WindowSetup { window = $0; dress($0) })
             .onChange(of: browser.prefs.sidebar) { _, _ in
@@ -632,6 +663,8 @@ struct ContentView: View {
             guard event.type == .keyDown else {
                 // ⌘ let go of ends a ⌘K walk, wherever it stopped.
                 if !event.modifierFlags.contains(.command) { browser.landSummon() }
+                // ⌃ let go of takes the recent tab the walk landed on.
+                if !event.modifierFlags.contains(.control) { browser.landSwitcher() }
                 return event
             }
             return take(event) ? nil : event
@@ -647,9 +680,21 @@ struct ContentView: View {
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         let key = event.charactersIgnoringModifiers?.lowercased() ?? ""
 
+        if browser.recordingShortcut != nil {
+            return browser.captureShortcut(event)
+        }
+
         // Escape puts the page back. On a blank tab there is no page to put
         // back, so it belongs to whatever else wants it.
         if event.keyCode == 53 {
+            if !browser.switcher.isEmpty {
+                browser.cancelSwitcher()
+                return true
+            }
+            if browser.glance != nil {
+                browser.closeGlance()
+                return true
+            }
             if browser.editingTab != nil {
                 browser.cancelTabEdit()
                 return true
@@ -708,11 +753,7 @@ struct ContentView: View {
         //
         // While an address is being typed, the list under the field is what
         // there is to move through, and Return takes whatever the walk landed on.
-        if event.keyCode == 48, !flags.contains(.command), !flags.contains(.option) {
-            if flags.contains(.control) {
-                browser.step(flags.contains(.shift) ? -1 : 1)
-                return true
-            }
+        if event.keyCode == 48, !flags.contains(.command), !flags.contains(.option), !flags.contains(.control) {
             if browser.editingTab != nil { return true }
             if browser.fieldShowing, !browser.offers.isEmpty {
                 browser.walk(flags.contains(.shift) ? -1 : 1)
@@ -734,6 +775,13 @@ struct ContentView: View {
         // none of ours use those.
         if #available(macOS 15.4, *), !flags.intersection([.command, .option, .control]).isEmpty,
            Extensions.shared.take(event) {
+            return true
+        }
+
+        if let id = Keys.match(event, overrides: browser.prefs.shortcutOverrides) {
+            return browser.performKey(id)
+        }
+        if Keys.stolen(event, overrides: browser.prefs.shortcutOverrides) {
             return true
         }
 
