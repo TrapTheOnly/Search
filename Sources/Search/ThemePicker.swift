@@ -83,7 +83,7 @@ enum ThemePickerPanel {
 
     static func show(for browser: Browser) {
         hide()
-        let root = ThemePicker(browser: browser) { hide() }
+        let root = ThemePicker(browser: browser)
         let host = NSHostingView(rootView: root)
         let size = NSSize(width: 292, height: 368)
         host.frame = NSRect(origin: .zero, size: size)
@@ -177,7 +177,6 @@ enum ThemePickerPanel {
 
 struct ThemePicker: View {
     @ObservedObject var browser: Browser
-    var onClose: () -> Void
 
     @State private var hue: Double = 0.08
     @State private var sat: Double = 0.75
