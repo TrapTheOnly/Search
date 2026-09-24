@@ -107,6 +107,7 @@ struct SideBar: View {
         .animation(Motion.settle, value: browser.tabs.map(\.id))
         .animation(Motion.settle, value: browser.essentials.map(\.id))
         .animation(Motion.settle, value: browser.pinnedCount)
+        .animation(Motion.settle, value: browser.downloadsChrome)
     }
 
     /// The column's edge: pull it to make the column wider or narrower,
@@ -452,6 +453,9 @@ struct SideBar: View {
                 .popover(isPresented: $browser.bookmarksOpen, arrowEdge: .trailing) {
                     BookmarksDropdown(browser: browser, bookmarks: browser.bookmarks)
                 }
+            if browser.downloadsChrome {
+                DownloadsDoor(browser: browser)
+            }
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 10)
@@ -790,5 +794,55 @@ struct Door: View {
         .help(help)
         .animation(Motion.quick, value: hovering)
         .animation(Motion.quick, value: on)
+    }
+}
+
+/// Downloads, as a chrome door: appears while files arrive, keeps a quiet
+/// progress ring, and opens the same panel as ⇧⌘J. Goes when the panel is
+/// opened after the last file lands, or about four seconds later on its own.
+struct DownloadsDoor: View {
+    @ObservedObject var browser: Browser
+
+    @State private var hovering = false
+
+    private var busy: Bool { !browser.fetching.isEmpty }
+    private var fraction: Double { browser.downloadFraction }
+    private var count: Int { browser.fetching.count }
+
+    var body: some View {
+        Button { browser.hoarding = true } label: {
+            ZStack {
+                Image(systemName: busy ? "arrow.down" : "checkmark")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(browser.hoarding || hovering ? Palette.ink : Palette.muted)
+                if busy {
+                    Circle()
+                        .stroke(Palette.faint.opacity(0.55), lineWidth: 1.5)
+                        .frame(width: 18, height: 18)
+                    Circle()
+                        .trim(from: 0, to: min(max(fraction, 0.04), 1))
+                        .stroke(Palette.ink.opacity(0.7), style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
+                        .rotationEffect(.degrees(-90))
+                        .frame(width: 18, height: 18)
+                        .animation(Motion.quick, value: fraction)
+                }
+            }
+            .frame(width: 26, height: 26)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(browser.hoarding ? Palette.wash : (hovering ? Palette.hover : .clear))
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .help(busy
+              ? (count == 1 ? "1 download in progress   ⇧⌘J" : "\(count) downloads in progress   ⇧⌘J")
+              : "Downloads   ⇧⌘J")
+        .accessibilityLabel(busy ? "Downloads, in progress" : "Downloads")
+        .animation(Motion.quick, value: hovering)
+        .animation(Motion.quick, value: browser.hoarding)
+        .animation(Motion.quick, value: busy)
+        .transition(.opacity.combined(with: .scale(scale: 0.88)))
     }
 }

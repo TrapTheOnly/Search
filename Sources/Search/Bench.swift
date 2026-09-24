@@ -397,6 +397,8 @@ final class Bench {
                 "passwords": browser.managing,
                 "history": browser.recalling,
                 "downloads": browser.hoarding,
+                "downloadsChrome": browser.downloadsChrome,
+                "fetching": browser.fetching.count,
                 "bookmarks": browser.bookmarking,
                 "field": browser.editing,
                 "suggesting": browser.suggesting != nil,
@@ -1169,6 +1171,20 @@ final class Bench {
             if let on = request["welcome"] as? Bool { browser.welcoming = on }
             if let on = request["history"] as? Bool { browser.recalling = on }
             if let on = request["downloads"] as? Bool { browser.hoarding = on }
+            if let on = request["downloadDemo"] as? Bool {
+                if on {
+                    browser.keepDemo(
+                        name: "sample-archive.zip",
+                        fraction: 0.62,
+                        received: 31_457_280,
+                        expected: 50_331_648
+                    )
+                } else {
+                    for fetch in browser.fetching where fetch.download == nil {
+                        browser.cancel(fetch)
+                    }
+                }
+            }
             if let on = request["bookmarks"] as? Bool { browser.bookmarking = on }
             if let on = request["hidden"] as? Bool { browser.reviewing = on }
             if let look = (request["look"] as? String).flatMap(Look.init) { browser.prefs.look = look }

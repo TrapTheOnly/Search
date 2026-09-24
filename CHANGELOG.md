@@ -14,6 +14,7 @@ in [ROADMAP.md](ROADMAP.md).
 ### Added
 
 - Per-space colour tint over Look for chrome (tab strip, sidebar, bookmarks bar). Space menu › **Theme…** opens a mac-native picker: Look (system / light / dark) plus a continuous hue–saturation wash and named swatches. Tint layers on Look; it does not replace it.
+- A downloads door beside Bookmarks while a file is arriving — a quiet progress ring, click opens the same panel as ⇧⌘J. It stays until you open Downloads after the last file lands, or fades about four seconds later on its own.
 - Downloads shows ones still arriving — how far along, and Cancel — above the ones already kept. Search the list, open a file or Show in Finder, open the downloads folder, clear the list. ⇧⌘J as before.
 - Essentials: a pin that stays in every space, above that space's own tabs. Ordinary pins stay where they are. Right-click a tab › Make Essential / Remove from Essentials.
 - A bookmarks bar, as in Chrome and Safari: your bookmarks in a row above the page, folders opening as menus. Off unless turned on, in Settings › Tabs › Show the bookmarks bar or Bookmarks › Show Bookmarks Bar; it folds away with the tabs.

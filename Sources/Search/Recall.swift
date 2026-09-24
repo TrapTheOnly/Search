@@ -298,10 +298,20 @@ struct DownloadsPanel: View {
         var body: some View {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 12) {
-                    Image(systemName: "arrow.down.circle")
-                        .font(.system(size: 13, weight: .regular))
-                        .foregroundStyle(Palette.ink)
-                        .frame(width: 18)
+                    ZStack {
+                        Circle()
+                            .stroke(Palette.faint.opacity(0.55), lineWidth: 1.5)
+                            .frame(width: 18, height: 18)
+                        Circle()
+                            .trim(from: 0, to: min(max(fetch.fraction, 0.04), 1))
+                            .stroke(Palette.ink.opacity(0.75), style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
+                            .rotationEffect(.degrees(-90))
+                            .frame(width: 18, height: 18)
+                        Image(systemName: "arrow.down")
+                            .font(.system(size: 8, weight: .semibold))
+                            .foregroundStyle(Palette.ink)
+                    }
+                    .frame(width: 18)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(fetch.name)
                             .font(.system(size: 13))
@@ -312,16 +322,25 @@ struct DownloadsPanel: View {
                             .font(.system(size: 11.5))
                             .foregroundStyle(Palette.muted)
                             .lineLimit(1)
+                            .monospacedDigit()
                     }
                     Spacer(minLength: 8)
                     if hovering {
                         Quick("Cancel", tint: .red.opacity(0.75), act: cancel)
                     }
                 }
-                ProgressView(value: min(max(fetch.fraction, 0), 1))
-                    .progressViewStyle(.linear)
-                    .tint(Palette.ink)
-                    .padding(.leading, 30)
+                GeometryReader { geo in
+                    ZStack(alignment: .leading) {
+                        Capsule()
+                            .fill(Palette.hairline)
+                        Capsule()
+                            .fill(Palette.ink.opacity(0.72))
+                            .frame(width: max(3, geo.size.width * min(max(fetch.fraction, 0), 1)))
+                    }
+                }
+                .frame(height: 3)
+                .padding(.leading, 30)
+                .animation(Motion.quick, value: fetch.fraction)
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
