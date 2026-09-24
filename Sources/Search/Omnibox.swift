@@ -10,9 +10,13 @@ struct Omnibox: View {
     /// Raised over a page by ⌘L, rather than standing on an empty tab.
     let over: Bool
 
-    /// The field's own height — the 22 of text and 14 of air above and below,
-    /// laid out as one AppKit frame so the whole pill is the hit target.
+    /// The field's own height — the 22 of text and 14 of air above and below —
+    /// so the list can sit below it without being stacked with it. The AppKit
+    /// well fills this same height for hits; the cell keeps the text centred.
     private static let fieldHeight: CGFloat = 22 + 14 * 2
+    /// Air left and right of the letters, inside the pill — kept in the well
+    /// so the rounded ends stay part of the hit target.
+    fileprivate static let textInset: CGFloat = 22
 
     @State private var shake: CGFloat = 0
     @State private var refused = false
@@ -59,8 +63,7 @@ struct Omnibox: View {
 
     private var field: some View {
         AddressField(browser: browser)
-            .padding(.horizontal, 22)
-            .frame(height: Self.fieldHeight)
+            .frame(width: Metrics.fieldWidth, height: Self.fieldHeight)
             .background {
                 ZStack {
                     // A slow, almost invisible breath under the field. It is
@@ -255,9 +258,12 @@ private struct Breath: NSViewRepresentable {
 /// needs a real text field and its delegate.
 ///
 /// The representable is a well that always fills the size SwiftUI proposes.
-/// An bare NSTextField kept its intrinsic ~19 pt text height inside the 50 pt
+/// A bare NSTextField kept its intrinsic ~19 pt text height inside the 50 pt
 /// pill, so most of the visible chrome hit the window's hosting view instead —
-/// I-beam and click-to-focus only on a thin band (24 Sep 2026).
+/// I-beam and click-to-focus only on a thin band (24 Sep 2026). Stretching the
+/// field to the full pill fixed hits but drew the placeholder at the top of
+/// the tall control. The well still fills the pill for hits; a centred cell
+/// draws the letters in the middle, and the field editor follows.
 struct AddressField: NSViewRepresentable {
     @ObservedObject var browser: Browser
 
@@ -265,7 +271,29 @@ struct AddressField: NSViewRepresentable {
 
     func makeNSView(context: Context) -> Well {
         let well = Well()
-        let field = NSTextField()
+        let field = NSTextField(frame: .zero)
+        let cell = CenteredCell(textCell: "")
+        cell.isBordered = false
+        cell.isBezeled = false
+        cell.drawsBackground = false
+        cell.focusRingType = .none
+        cell.font = .systemFont(ofSize: 15.5)
+        cell.textColor = Palette.NS.ink
+        cell.usesSingleLineMode = true
+        cell.isEditable = true
+        cell.isSelectable = true
+        cell.wraps = false
+        cell.lineBreakMode = .byTruncatingTail
+        // SwiftUI picks its own colour for a placeholder, and on a pale ground
+        // that colour was near-white.
+        cell.placeholderAttributedString = NSAttributedString(
+            string: "Enter a web address",
+            attributes: [
+                .font: NSFont.systemFont(ofSize: 15.5),
+                .foregroundColor: NSColor(Palette.ink.opacity(0.3)),
+            ]
+        )
+        field.cell = cell
         field.delegate = context.coordinator
         field.isBordered = false
         field.drawsBackground = false
@@ -273,17 +301,8 @@ struct AddressField: NSViewRepresentable {
         field.font = .systemFont(ofSize: 15.5)
         field.textColor = Palette.NS.ink
         field.lineBreakMode = .byTruncatingTail
-        field.cell?.usesSingleLineMode = true
-        field.cell?.wraps = false
-        // SwiftUI picks its own colour for a placeholder, and on a pale ground
-        // that colour was near-white.
-        field.placeholderAttributedString = NSAttributedString(
-            string: "Enter a web address",
-            attributes: [
-                .font: NSFont.systemFont(ofSize: 15.5),
-                .foregroundColor: NSColor(Palette.ink.opacity(0.3)),
-            ]
-        )
+        field.translatesAutoresizingMaskIntoConstraints = true
+        field.autoresizingMask = []
         well.field = field
         well.addSubview(field)
         return well
@@ -326,8 +345,61 @@ struct AddressField: NSViewRepresentable {
         }
     }
 
-    /// Fills whatever size SwiftUI gives the representable, and keeps the
-    /// text field stretched to that — so the hit target matches the pill.
+    /// Draws single-line text in the vertical middle of a tall control, and
+    /// puts the field editor in the same band so editing matches the look.
+    final class CenteredCell: NSTextFieldCell {
+        private func centered(_ rect: NSRect) -> NSRect {
+            var area = super.drawingRect(forBounds: rect)
+            let size = cellSize(forBounds: rect)
+            let slack = area.height - size.height
+            guard slack > 0 else { return area }
+            area.origin.y += (slack / 2).rounded(.toNearestOrAwayFromZero)
+            area.size.height = size.height
+            return area
+        }
+
+        override func drawingRect(forBounds rect: NSRect) -> NSRect { centered(rect) }
+
+        override func titleRect(forBounds rect: NSRect) -> NSRect { centered(rect) }
+
+        override func select(
+            withFrame rect: NSRect,
+            in controlView: NSView,
+            editor textObj: NSText,
+            delegate: Any?,
+            start selStart: Int,
+            length selLength: Int
+        ) {
+            super.select(
+                withFrame: centered(rect),
+                in: controlView,
+                editor: textObj,
+                delegate: delegate,
+                start: selStart,
+                length: selLength
+            )
+        }
+
+        override func edit(
+            withFrame rect: NSRect,
+            in controlView: NSView,
+            editor textObj: NSText,
+            delegate: Any?,
+            event: NSEvent?
+        ) {
+            super.edit(
+                withFrame: centered(rect),
+                in: controlView,
+                editor: textObj,
+                delegate: delegate,
+                event: event
+            )
+        }
+    }
+
+    /// Fills whatever size SwiftUI gives the representable. The text field
+    /// stretches to that for hits and the I-beam; its cell keeps the letters
+    /// centred so the pill looks as it did before the hit-target fix.
     final class Well: NSView {
         var field: NSTextField?
 
@@ -338,7 +410,20 @@ struct AddressField: NSViewRepresentable {
 
         override func layout() {
             super.layout()
-            field?.frame = bounds
+            guard let field else { return }
+            let inset = Omnibox.textInset
+            let width = max(0, bounds.width - inset * 2)
+            // Full height — hits match the pill; CenteredCell does the vertical air.
+            field.frame = NSRect(x: inset, y: 0, width: width, height: bounds.height)
+        }
+
+        override func hitTest(_ point: NSPoint) -> NSView? {
+            guard !isHidden, frame.contains(point), let field else { return nil }
+            return field
+        }
+
+        override func resetCursorRects() {
+            addCursorRect(bounds, cursor: .iBeam)
         }
     }
 
