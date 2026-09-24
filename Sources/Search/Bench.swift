@@ -298,15 +298,17 @@ final class Bench {
                 answer(["folder": folder.id.uuidString, "name": folder.name])
                 return
             }
-            if let id = request["id"] as? String, let uuid = UUID(uuidString: id),
+            if let id = request["folder"] as? String ?? request["id"] as? String,
+               let uuid = UUID(uuidString: id),
                let folder = browser.folders.first(where: { $0.id == uuid }) {
                 if request["toggle"] as? Bool == true {
                     browser.toggleFolder(folder)
                 }
-                if let tab = find(request, in: browser) {
+                let tabID = request["tab"] as? String
+                if let tabID, let tab = find(["id": tabID], in: browser) {
                     browser.place(tab, in: folder)
                 }
-                answer(["folder": folder.id.uuidString, "collapsed": folder.collapsed, "members": browser.tabs.filter { $0.folderID == folder.id }.count])
+                answer(["folder": folder.id.uuidString, "collapsed": browser.folders.first { $0.id == uuid }?.collapsed ?? folder.collapsed, "members": browser.tabs.filter { $0.folderID == uuid }.count])
                 return
             }
             answer([
