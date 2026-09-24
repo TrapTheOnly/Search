@@ -291,12 +291,17 @@ private struct PillHitPad: NSViewRepresentable {
         }
 
         override func mouseDown(with event: NSEvent) {
+            // askFocus bumps the request the field's update already answers;
+            // makeFirstResponder covers the common case without waiting a turn.
+            focus?()
             if let field = addressField() {
                 window?.makeFirstResponder(field)
-            } else {
-                focus?()
             }
         }
+
+        /// The pad sits where empty chrome used to forward to the window;
+        /// clicking it must focus the field, not drag the window.
+        override var mouseDownCanMoveWindow: Bool { false }
 
         override func resetCursorRects() {
             addCursorRect(bounds, cursor: .iBeam)
