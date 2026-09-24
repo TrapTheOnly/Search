@@ -575,14 +575,14 @@ final class Browser: NSObject, ObservableObject {
     /// and that letter arrives selected so the next keystroke replaces it.
     @Published var editingPin: Tab.ID?
 
-    var pinnedCount: Int { essentials.count + tabs.filter { $0.pin != nil }.count }
+    var pinnedCount: Int { essentials.count + tabs.filter { $0.pin != nil && !$0.essential }.count }
 
     func pin(_ tab: Tab) {
         if tab.pin == nil {
             tab.pin = tab.monogram
             // Pinned tabs live at the head of the row, in the order they were
             // pinned, so their letters never move under your hand.
-            if let here = tabs.firstIndex(where: { $0.id == tab.id }) {
+            if !tab.essential, let here = tabs.firstIndex(where: { $0.id == tab.id }) {
                 let home = max(0, spacePins - 1)
                 if here != home {
                     tabs.move(
@@ -591,6 +591,12 @@ final class Browser: NSObject, ObservableObject {
                     )
                 }
             }
+        }
+        // Pin lives on Tab; the sidebar filters pins from Browser. Always
+        // republish and re-order so a pin never stays drawn as a loose row
+        // when it was already at the pin home index (no tabs.move).
+        if !tab.essential {
+            tabs = Self.orderSpacePins(tabs)
         }
         // No dialog and no waiting cursor: the letter is taken from the
         // address and applied. Changing it is a separate act, for the day it
@@ -633,6 +639,7 @@ final class Browser: NSObject, ObservableObject {
                 tabs.move(fromOffsets: IndexSet(integer: here), toOffset: home > here ? home + 1 : home)
             }
         }
+        tabs = Self.orderSpacePins(tabs)
         rememberSession()
     }
 
@@ -923,12 +930,18 @@ final class Browser: NSObject, ObservableObject {
         }
         for entry in saved.tabs {
             guard let url = URL(string: entry.url) else { continue }
+            // Essentials are restored separately; never also spawn them as
+            // ordinary space tabs (duplicate ids / ghost pin squares).
+            if essentials.contains(where: {
+                ($0.pending ?? $0.address)?.absoluteString == entry.url
+            }) { continue }
             let tab = Tab()
             prepare(tab)
             tab.restore(url: url, title: entry.title, name: entry.name)
             tab.pin = entry.pin
             tabs.append(tab)
         }
+        tabs = Self.orderSpacePins(tabs)
         guard !tabs.isEmpty else {
             adopt(Tab())
             return
@@ -1530,15 +1543,18 @@ final class Browser: NSObject, ObservableObject {
     /// nothing until one is looked at (see Spaces.swift).
     func loadRow(_ space: UUID) -> Parked {
         let saved = Session.read(space: space)
+        let essentialURLs = Set(essentials.compactMap { ($0.pending ?? $0.address)?.absoluteString })
         var row: [Tab] = []
         for entry in saved.tabs {
             guard let url = URL(string: entry.url) else { continue }
+            if essentialURLs.contains(entry.url) { continue }
             let tab = Tab(configuration: Web.configuration(space: space))
             prepare(tab)
             tab.restore(url: url, title: entry.title, name: entry.name)
             tab.pin = entry.pin
             row.append(tab)
         }
+        row = Self.orderSpacePins(row)
         let active = row.indices.contains(saved.active) ? row[saved.active].id : row.first?.id
         return Parked(tabs: row, active: active)
     }
@@ -1546,8 +1562,29 @@ final class Browser: NSObject, ObservableObject {
     /// Another space's row put on screen in place of this one (see
     /// Spaces.swift) — empty, for one that restores its own.
     func showRow(_ row: [Tab], active: Tab.ID?) {
-        tabs = row
-        activeID = active ?? row.first?.id
+        // Scrub essentials and put pins in front. An essential that also sat
+        // in the space row shared a ForEach id with the sticky strip and left
+        // ghost pin squares over loose tabs after park/restore.
+        let cleaned = Self.orderSpacePins(row)
+        tabs = cleaned
+        if let active, cleaned.contains(where: { $0.id == active }) {
+            activeID = active
+        } else {
+            activeID = cleaned.first?.id
+        }
+    }
+
+    /// Pins first, loose after; drop any essential that leaked into the space
+    /// row. Pin state on each Tab is left alone — only order and membership.
+    static func orderSpacePins(_ row: [Tab]) -> [Tab] {
+        let pins = row.filter { $0.pin != nil && !$0.essential }
+        let loose = row.filter { $0.pin == nil && !$0.essential }
+        return pins + loose
+    }
+
+    /// Scrub essentials out of the space row and put pins in front.
+    func scrubSpaceRow() {
+        tabs = Self.orderSpacePins(tabs)
     }
 
     /// A tab made outside the row — a peek being kept — put in it at `index`.

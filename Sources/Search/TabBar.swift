@@ -629,7 +629,7 @@ private struct TabPill: View {
                 }
             }
             .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
-            .matchedGeometryEffect(id: "live", in: pill)
+            .matchedGeometryEffect(id: pinned ? "live-pin" : "live-row", in: pill)
         } else if hovering {
             RoundedRectangle(cornerRadius: 9, style: .continuous)
                 .fill(Palette.hover)
@@ -831,16 +831,16 @@ struct TabMenu: View {
 
     var body: some View {
         if tab.pin == nil && !tab.essential {
-            Button("Pin") { browser.pin(tab) }
+            Button("Pin to this space") { browser.pin(tab) }
                 .disabled(tab.isBlank)
-        } else {
+        } else if tab.pin != nil {
             Button("Change Letter") { browser.editLetter(tab) }
-            Button("Unpin") { browser.unpin(tab) }
+            Button(tab.essential ? "Unpin" : "Unpin from this space") { browser.unpin(tab) }
         }
         if tab.essential {
             Button("Remove from Essentials") { browser.removeEssential(tab) }
         } else {
-            Button("Make Essential") { browser.makeEssential(tab) }
+            Button("Make Essential (all spaces)") { browser.makeEssential(tab) }
                 .disabled(tab.isBlank)
         }
         Divider()

@@ -4,10 +4,16 @@ import SwiftUI
 // that space's own tabs. Ordinary pins stay where they are. Ported from
 // feature/light-zen; folders, glance and split stay out of this cut.
 //
+// Two verbs, not a gradient:
+// - **Pin** — per-space only; lives in that space's pin grid / strip.
+// - **Essential** — profile-wide; sticky above space pins in the sidebar and
+//   beside the top-bar swipe (TabBar).
+// Pin does not "promote toward" Essential.
+//
 // Scope (Zen-aligned):
 // - Essentials are **profile-wide**, not space-owned. Switching spaces must
-//   not unload or rebuild them (sticky strip in TabBar; sidebar pin layout
-//   owned separately — leave Side's pin grid alone).
+//   not unload or rebuild them (sticky strip in TabBar; sticky essentials
+//   block above the sidebar swipe in Side).
 // - A space with `sharesSignIns == false` ("signed out") isolates cookies /
 //   sign-ins only. Essentials still show there — they are not migrated into
 //   that space's session. True isolation (hide Essentials too) is a Profile.
@@ -43,12 +49,12 @@ extension Browser {
         return parkedTabs.first { $0.id == id }
     }
 
-    var spacePins: Int { tabs.filter { $0.pin != nil }.count }
+    var spacePins: Int { tabs.filter { $0.pin != nil && !$0.essential }.count }
 
     var pieces: [StripPiece] {
         var out: [StripPiece] = essentials.map { .essential($0) }
-        out += tabs.filter { $0.pin != nil }.map { .pin($0) }
-        out += tabs.filter { $0.pin == nil }.map { .loose($0) }
+        out += tabs.filter { $0.pin != nil && !$0.essential }.map { .pin($0) }
+        out += tabs.filter { $0.pin == nil && !$0.essential }.map { .loose($0) }
         return out
     }
 
@@ -96,6 +102,8 @@ extension Browser {
         if tab.pin == nil { pin(tab) }
         tab.essential = true
         detach(tab)
+        // Belt and braces: nothing essential may remain in the space row.
+        scrubSpaceRow()
         if !essentials.contains(where: { $0.id == tab.id }) {
             essentials.append(tab)
         }
