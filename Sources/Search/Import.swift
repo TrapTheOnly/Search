@@ -364,3 +364,214 @@ enum Chromium {
         return out
     }
 }
+
+// Firefox-family browsers — Firefox, Zen, and the rest that still keep
+// bookmarks in places.sqlite the way Mozilla always has. No keychain dance
+// for bookmarks: the tree is plain rows. Same rule as Chromium: copy the
+// file before reading it, because the browser is usually open.
+
+enum Firefox {
+    struct Source: Identifiable, Hashable {
+        let name: String
+        /// Under ~/Library/Application Support.
+        let folder: String
+
+        var id: String { name }
+
+        var root: URL {
+            FileManager.default
+                .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+                .appendingPathComponent(folder, isDirectory: true)
+        }
+
+        /// Each profile's places.sqlite, under Profiles/<id>/.
+        var files: [URL] {
+            let profiles = root.appendingPathComponent("Profiles", isDirectory: true)
+            return ((try? FileManager.default.contentsOfDirectory(
+                at: profiles,
+                includingPropertiesForKeys: nil,
+                options: .skipsHiddenFiles
+            )) ?? [])
+            .map { $0.appendingPathComponent("places.sqlite") }
+            .filter { FileManager.default.fileExists(atPath: $0.path) }
+        }
+    }
+
+    static let known: [Source] = [
+        Source(name: "Zen", folder: "zen"),
+        Source(name: "Firefox", folder: "Firefox"),
+        Source(name: "Floorp", folder: "Floorp"),
+        Source(name: "Waterfox", folder: "Waterfox"),
+        Source(name: "LibreWolf", folder: "librewolf"),
+    ]
+
+    /// Only the browsers actually on this Mac, with something to read.
+    static func installed() -> [Source] {
+        known.filter { !$0.files.isEmpty }
+    }
+
+    /// Bookmarks from every profile: the toolbar first (as top-level items,
+    /// the way Chromium's bar comes in), then the menu, other bookmarks,
+    /// and mobile — each as a named folder when it holds anything.
+    static func bookmarks(in source: Source) -> [Bookmark] {
+        var out: [Bookmark] = []
+        for file in source.files {
+            out += bookmarkTree(in: file)
+        }
+        return out
+    }
+
+    // MARK: - places.sqlite
+
+    private static let toolbar = "toolbar_____"
+    private static let menu = "menu________"
+    private static let unfiled = "unfiled_____"
+    private static let mobile = "mobile______"
+
+    private struct Row {
+        let id: Int64
+        let type: Int32
+        let parent: Int64
+        let position: Int32
+        let title: String
+        let url: String?
+        let guid: String
+    }
+
+    private static func bookmarkTree(in file: URL) -> [Bookmark] {
+        let rows = rows(in: file)
+        guard !rows.isEmpty else { return [] }
+
+        var byParent: [Int64: [Row]] = [:]
+        var byGuid: [String: Row] = [:]
+        for row in rows {
+            byParent[row.parent, default: []].append(row)
+            byGuid[row.guid] = row
+        }
+        for key in byParent.keys {
+            byParent[key]?.sort { $0.position < $1.position }
+        }
+
+        func kids(of guid: String) -> [Bookmark] {
+            guard let folder = byGuid[guid] else { return [] }
+            return nodes(in: byParent[folder.id] ?? [], byParent: byParent)
+        }
+
+        var out: [Bookmark] = []
+        out += kids(of: toolbar)
+        let menuKids = kids(of: menu)
+        if !menuKids.isEmpty { out.append(.folder("Bookmarks Menu", menuKids)) }
+        let otherKids = kids(of: unfiled)
+        if !otherKids.isEmpty { out.append(.folder("Other Bookmarks", otherKids)) }
+        let mobileKids = kids(of: mobile)
+        if !mobileKids.isEmpty { out.append(.folder("Mobile", mobileKids)) }
+        return out
+    }
+
+    private static func nodes(in rows: [Row], byParent: [Int64: [Row]]) -> [Bookmark] {
+        rows.compactMap { row -> Bookmark? in
+            switch row.type {
+            case 1: // bookmark
+                guard let text = row.url, let url = URL(string: text),
+                      url.scheme == "http" || url.scheme == "https"
+                else { return nil }
+                return .site(row.title, url)
+            case 2: // folder
+                let children = nodes(in: byParent[row.id] ?? [], byParent: byParent)
+                return .folder(row.title.isEmpty ? "Folder" : row.title, children)
+            default: // separator, or anything else
+                return nil
+            }
+        }
+    }
+
+    private static func rows(in file: URL) -> [Row] {
+        let stamp = UUID().uuidString
+        let temp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("office-import-\(stamp).db")
+        guard (try? FileManager.default.copyItem(at: file, to: temp)) != nil else { return [] }
+        // WAL companions, when the browser is mid-write — so the copy opens
+        // as one consistent snapshot rather than an older checkpoint alone.
+        for suffix in ["-wal", "-shm"] {
+            let side = URL(fileURLWithPath: file.path + suffix)
+            guard FileManager.default.fileExists(atPath: side.path) else { continue }
+            try? FileManager.default.copyItem(
+                at: side,
+                to: URL(fileURLWithPath: temp.path + suffix)
+            )
+        }
+        defer {
+            try? FileManager.default.removeItem(at: temp)
+            for suffix in ["-wal", "-shm"] {
+                try? FileManager.default.removeItem(at: URL(fileURLWithPath: temp.path + suffix))
+            }
+        }
+
+        var db: OpaquePointer?
+        guard sqlite3_open_v2(temp.path, &db, SQLITE_OPEN_READONLY, nil) == SQLITE_OK, let db else {
+            return []
+        }
+        defer { sqlite3_close(db) }
+
+        let sql = """
+        SELECT b.id, b.type, b.parent, b.position, IFNULL(b.title, ''), p.url, IFNULL(b.guid, '')
+        FROM moz_bookmarks b
+        LEFT JOIN moz_places p ON b.fk = p.id
+        WHERE b.type IN (1, 2)
+        """
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK, let statement else {
+            return []
+        }
+        defer { sqlite3_finalize(statement) }
+
+        var out: [Row] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            let id = sqlite3_column_int64(statement, 0)
+            let type = sqlite3_column_int(statement, 1)
+            let parent = sqlite3_column_int64(statement, 2)
+            let position = sqlite3_column_int(statement, 3)
+            let title = sqlite3_column_text(statement, 4).map { String(cString: $0) } ?? ""
+            let url = sqlite3_column_text(statement, 5).map { String(cString: $0) }
+            let guid = sqlite3_column_text(statement, 6).map { String(cString: $0) } ?? ""
+            out.append(Row(id: id, type: type, parent: parent, position: position, title: title, url: url, guid: guid))
+        }
+        return out
+    }
+}
+
+/// Anything on this Mac we can bring bookmarks (and, for Chromium, more) from.
+enum ImportSource: Identifiable, Hashable {
+    case chromium(Chromium.Source)
+    case firefox(Firefox.Source)
+
+    var id: String {
+        switch self {
+        case .chromium(let source): return "chromium:\(source.id)"
+        case .firefox(let source): return "firefox:\(source.id)"
+        }
+    }
+
+    var name: String {
+        switch self {
+        case .chromium(let source): return source.name
+        case .firefox(let source): return source.name
+        }
+    }
+
+    /// Passwords and history only exist for Chromium today.
+    var offersPasswords: Bool {
+        if case .chromium = self { return true }
+        return false
+    }
+
+    var offersHistory: Bool {
+        if case .chromium = self { return true }
+        return false
+    }
+
+    static func installed() -> [ImportSource] {
+        Chromium.installed().map(ImportSource.chromium)
+            + Firefox.installed().map(ImportSource.firefox)
+    }
+}
