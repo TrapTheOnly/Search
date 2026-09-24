@@ -1056,15 +1056,25 @@ final class Browser: NSObject, ObservableObject {
     }
 
     func writeSession(now: Bool = false) {
+        let essentialRows = essentials.compactMap { sessionEntry(for: $0) }
+        // Essentials are profile-owned. Canonical home is the first space's
+        // session file — never claim them on another space (especially a
+        // signed-out one), so switching or restoring there doesn't look like
+        // they "moved" into it.
         Session.write(
             now: now,
             space: spaceID,
             .init(
                 tabs: tabs.compactMap { sessionEntry(for: $0) },
                 active: tabs.firstIndex { $0.id == activeID } ?? 0,
-                essentials: essentials.compactMap { sessionEntry(for: $0) }
+                essentials: spaceID == Space.firstID ? (essentialRows.isEmpty ? nil : essentialRows) : nil
             )
         )
+        if spaceID != Space.firstID {
+            var home = Session.read(space: Space.firstID)
+            home.essentials = essentialRows.isEmpty ? nil : essentialRows
+            Session.write(now: now, space: Space.firstID, home)
+        }
     }
 
     private func rememberSession() {

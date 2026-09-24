@@ -40,76 +40,77 @@ struct TabBar: View {
                     ProfileDot(browser: browser)
                     if browser.prefs.usesSpaces { SpaceDot(browser: browser) }
 
-                    // The tabs, in a run of their own. While they fit, it is
-                    // exactly as wide as they are and nothing about the row
-                    // changes. Past what the window holds at their narrowest
-                    // it takes the room there is and scrolls inside its own
-                    // edges — never under the lights, never over the doors —
-                    // keeping the tab you are on in view.
-                    // The spaces, one above the other: up or down over the bar
-                    // and the next one's tabs come in as these go, with nothing
-                    // between them (see SpaceSwipe). Past the last, a new one.
-                    ZStack(alignment: .leading) {
-                        if making {
-                            NewSpaceCard(browser: browser, inline: true)
-                                .fixedSize()
-                                .offset(y: browser.spaceSwipe)
-                        } else {
-                            ScrollViewReader { reader in
-                                ScrollView(.horizontal, showsIndicators: false) {
-                                    HStack(spacing: Metrics.tabGap) {
-                                        ForEach(Array(browser.strip.enumerated()), id: \.element.id) { index, tab in
-                                            // A pinned square moves among pinned squares, a title
-                                            // among titles: each has its own stride.
-                                            let step = (tab.pin != nil || tab.essential ? Metrics.pinWidth : width(in: geo.size.width)) + Metrics.tabGap
-                                            TabPill(
-                                                browser: browser,
-                                                prefs: browser.prefs,
-                                                tab: tab,
-                                                live: tab.id == browser.activeID,
-                                                width: width(in: geo.size.width),
-                                                room: geo.size.width - Metrics.lights - 12,
-                                                pill: pill,
-                                                close: { browser.close(tab) }
-                                            )
-                                            .modifier(Carried(index: index, count: browser.strip.count, step: step, vertical: false, space: "strip") { target in
-                                                if tab.essential || target < browser.essentials.count {
-                                                    browser.movePin(tab, to: target)
-                                                } else if browser.strip.indices.contains(target) {
-                                                    let dest = browser.strip[target]
-                                                    if dest.essential {
-                                                        browser.movePin(tab, to: target)
-                                                    } else if let at = browser.tabs.firstIndex(where: { $0.id == dest.id }) {
-                                                        browser.move(tab, to: at)
+                    // Essentials stay put across space switches (profile-owned);
+                    // only this space's pins and loose tabs ride the swipe.
+                    // Putting essentials inside the swipe made them leave with
+                    // the old row and reappear with the new one — a blink.
+                    HStack(spacing: Metrics.tabGap) {
+                        if !making, !browser.essentials.isEmpty {
+                            essentialsStrip(in: geo.size.width, pill: pill)
+                        }
+
+                        // The spaces, one above the other: up or down over the bar
+                        // and the next one's tabs come in as these go, with nothing
+                        // between them (see SpaceSwipe). Past the last, a new one.
+                        ZStack(alignment: .leading) {
+                            if making {
+                                NewSpaceCard(browser: browser, inline: true)
+                                    .fixedSize()
+                                    .offset(y: browser.spaceSwipe)
+                            } else {
+                                ScrollViewReader { reader in
+                                    ScrollView(.horizontal, showsIndicators: false) {
+                                        HStack(spacing: Metrics.tabGap) {
+                                            ForEach(Array(browser.tabs.enumerated()), id: \.element.id) { index, tab in
+                                                // A pinned square moves among pinned squares, a title
+                                                // among titles: each has its own stride.
+                                                let step = (tab.pin != nil ? Metrics.pinWidth : width(in: geo.size.width)) + Metrics.tabGap
+                                                TabPill(
+                                                    browser: browser,
+                                                    prefs: browser.prefs,
+                                                    tab: tab,
+                                                    live: tab.id == browser.activeID,
+                                                    width: width(in: geo.size.width),
+                                                    room: geo.size.width - Metrics.lights - 12,
+                                                    pill: pill,
+                                                    close: { browser.close(tab) }
+                                                )
+                                                .modifier(Carried(index: index, count: browser.tabs.count, step: step, vertical: false, space: "strip") { target in
+                                                    guard browser.tabs.indices.contains(target) else { return }
+                                                    let dest = browser.tabs[target]
+                                                    if tab.pin != nil || dest.pin != nil {
+                                                        browser.movePin(tab, to: target + browser.essentials.count)
+                                                    } else {
+                                                        browser.move(tab, to: target)
                                                     }
-                                                }
-                                            })
-                                            .id(tab.id)
+                                                })
+                                                .id(tab.id)
+                                            }
                                         }
+                                        .frame(height: Metrics.strip)
                                     }
-                                    .frame(height: Metrics.strip)
+                                    .scrollDisabled(!overflowing(in: geo.size.width))
+                                    .frame(width: spaceRun(in: geo.size.width))
+                                    .onAppear { reveal(reader, in: geo.size.width) }
+                                    .onChange(of: overflowing(in: geo.size.width)) { _, _ in reveal(reader, in: geo.size.width) }
+                                    .onChange(of: browser.activeID) { _, _ in reveal(reader, in: geo.size.width, gliding: true) }
                                 }
-                                .scrollDisabled(!overflowing(in: geo.size.width))
-                                .frame(width: run(in: geo.size.width))
-                                .onAppear { reveal(reader, in: geo.size.width) }
-                                .onChange(of: overflowing(in: geo.size.width)) { _, _ in reveal(reader, in: geo.size.width) }
-                                .onChange(of: browser.activeID) { _, _ in reveal(reader, in: geo.size.width, gliding: true) }
-                            }
                                 .offset(y: browser.spaceSwipe)
+                            }
+                            if browser.spaceSwipe > 0, spaceAt > 0 {
+                                page(spaceAt - 1, in: geo.size.width, pill: above)
+                                    .offset(y: browser.spaceSwipe - Metrics.strip)
+                            }
+                            if browser.spaceSwipe < 0, spaceAt < browser.spaces.count {
+                                page(spaceAt + 1, in: geo.size.width, pill: below)
+                                    .offset(y: browser.spaceSwipe + Metrics.strip)
+                            }
                         }
-                        if browser.spaceSwipe > 0, spaceAt > 0 {
-                            page(spaceAt - 1, in: geo.size.width, pill: above)
-                                .offset(y: browser.spaceSwipe - Metrics.strip)
-                        }
-                        if browser.spaceSwipe < 0, spaceAt < browser.spaces.count {
-                            page(spaceAt + 1, in: geo.size.width, pill: below)
-                                .offset(y: browser.spaceSwipe + Metrics.strip)
-                        }
+                        .frame(width: making ? min(540, room(in: geo.size.width)) : spaceRun(in: geo.size.width), height: Metrics.strip, alignment: .leading)
+                        // Only up and down: a neighbour's row may run wider than this one.
+                        .mask(Rectangle().frame(width: 4000, height: Metrics.strip))
                     }
                     .frame(width: making ? min(540, room(in: geo.size.width)) : run(in: geo.size.width), height: Metrics.strip, alignment: .leading)
-                    // Only up and down: a neighbour's row may run wider than this one.
-                    .mask(Rectangle().frame(width: 4000, height: Metrics.strip))
-
                     // The way to a new page, right after the tabs rather than
                     // at the end of their run, so it is there however far the
                     // run has scrolled. Out of sight until the pointer is up here.
@@ -202,9 +203,46 @@ struct TabBar: View {
         browser.makingSpace ? browser.spaces.count : (browser.spaces.firstIndex { $0.id == browser.spaceID } ?? 0)
     }
 
+    /// Essentials alone — mounted outside the swipe so they never leave and
+    /// reappear when the space row does.
+    @ViewBuilder
+    private func essentialsStrip(in strip: CGFloat, pill: Namespace.ID) -> some View {
+        HStack(spacing: Metrics.tabGap) {
+            ForEach(Array(browser.essentials.enumerated()), id: \.element.id) { index, tab in
+                let step = Metrics.pinWidth + Metrics.tabGap
+                TabPill(
+                    browser: browser,
+                    prefs: browser.prefs,
+                    tab: tab,
+                    live: tab.id == browser.activeID,
+                    width: width(in: strip),
+                    room: strip - Metrics.lights - 12,
+                    pill: pill,
+                    close: { browser.close(tab) }
+                )
+                .modifier(Carried(index: index, count: browser.essentials.count, step: step, vertical: false, space: "essentials") { target in
+                    browser.movePin(tab, to: target)
+                })
+                .id(tab.id)
+                .help(essentialsHelp)
+            }
+        }
+        .frame(height: Metrics.strip)
+    }
+
+    /// Profile-wide essentials stay visible even in a signed-out space;
+    /// cookies are space-local. True isolation is a Profile.
+    private var essentialsHelp: String {
+        if browser.space.sharesSignIns == false {
+            return "Essential — stays in every space (profile-wide). This space has its own cookies; use a Profile to hide Essentials too."
+        }
+        return "Essential — stays in every space"
+    }
+
     /// Another space's row, drawn with the same pills as this one's so the
     /// two read as one bar while they pass — nothing to press until it is
     /// the one on screen. Past the last, the row for a new space.
+    /// Essentials are omitted here: they stay on the sticky strip above.
     @ViewBuilder
     private func page(_ index: Int, in strip: CGFloat, pill: Namespace.ID) -> some View {
         if index == browser.spaces.count {
@@ -216,7 +254,7 @@ struct TabBar: View {
             let row = space.id == browser.spaceID
                 ? Parked(tabs: browser.tabs, active: browser.activeID)
                 : browser.parked[space.id] ?? Parked(tabs: [], active: nil)
-            let shown = browser.essentials + row.tabs
+            let shown = row.tabs
             let each = width(in: strip, pinned: shown.filter { $0.pin != nil }.count, count: shown.count)
             HStack(spacing: Metrics.tabGap) {
                 ForEach(shown) { tab in
@@ -252,9 +290,27 @@ struct TabBar: View {
     }
 
     /// How wide the run of tabs is: as wide as the tabs while they fit, as
-    /// wide as the room there is once they don't.
+    /// wide as the room there is once they don't. Includes sticky essentials.
     private func run(in strip: CGFloat) -> CGFloat {
         min(content(in: strip), room(in: strip))
+    }
+
+    /// Width of the sticky essentials block alone (no trailing gap).
+    private func essentialsWidth() -> CGFloat {
+        let n = browser.essentials.count
+        guard n > 0 else { return 0 }
+        return CGFloat(n) * Metrics.pinWidth + CGFloat(max(0, n - 1)) * Metrics.tabGap
+    }
+
+    /// The swipeable part of the run — this space's pins and loose tabs —
+    /// after sticky essentials have taken their share of `run`.
+    private func spaceRun(in strip: CGFloat) -> CGFloat {
+        let full = run(in: strip)
+        let sticky = essentialsWidth()
+        guard sticky > 0 else { return full }
+        // Gap between essentials and the space row is outside both frames
+        // (parent HStack spacing); subtract sticky only.
+        return max(0, full - sticky - Metrics.tabGap)
     }
 
     private func overflowing(in strip: CGFloat) -> Bool {

@@ -40,6 +40,7 @@ in [ROADMAP.md](ROADMAP.md).
 
 ### Fixed
 
+- Essentials no longer blink when switching spaces in the top tab strip: they stay mounted beside the swipe, while only that space's pins and loose tabs move. A signed-out space still shows them (profile-wide); its session file no longer claims them — use a Profile for full isolation.
 - On a new tab, the address field's whole pill takes the click and shows the I-beam, without changing how the placeholder is drawn: an invisible hit pad covers the air around the letters. Stretching the AppKit field to the pill height (and a centred cell on top of that) had left the text top-heavy and a cloudy rectangle inside the chrome.
 - An extension from the Chrome Web Store is fetched again only when the store has a newer version. The daily check read the first `version=""` in the store's reply, which is the XML declaration's "1.0", so every extension counted as out of date: each was downloaded again (uBlock Origin Lite is nearly 10 MB), unloaded and reloaded about once a day, and a password manager signed out with it. Thanks [@burakbuilds](https://github.com/burakbuilds) ([#201](https://github.com/driceroland/Search/pull/201))
 - An appcast download link is taken only from the feed's own host. ([#166](https://github.com/driceroland/Search/issues/166))

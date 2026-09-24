@@ -1,8 +1,18 @@
 import SwiftUI
 
-// Essentials: pins that stay visible in every space, above that space's own
-// tabs. Ordinary pins stay where they are. Ported from feature/light-zen;
-// folders, glance and split stay out of this cut.
+// Essentials: pins that stay visible in every space of this profile, above
+// that space's own tabs. Ordinary pins stay where they are. Ported from
+// feature/light-zen; folders, glance and split stay out of this cut.
+//
+// Scope (Zen-aligned):
+// - Essentials are **profile-wide**, not space-owned. Switching spaces must
+//   not unload or rebuild them (sticky strip in TabBar; sidebar pin layout
+//   owned separately — leave Side's pin grid alone).
+// - A space with `sharesSignIns == false` ("signed out") isolates cookies /
+//   sign-ins only. Essentials still show there — they are not migrated into
+//   that space's session. True isolation (hide Essentials too) is a Profile.
+// - Persistence writes the essentials list onto the first space's session
+//   file only, so a signed-out space never looks like it "owns" them.
 
 /// What the strip and the column draw, in order: essentials, this space's
 /// pins, then loose tabs.
@@ -60,8 +70,14 @@ extension Browser {
         )
     }
 
+    /// Restore profile-wide essentials once. Prefer the first space's session
+    /// (canonical home); fall back to whatever the current space file still
+    /// carries from older builds that wrote essentials everywhere.
     func adoptEssentials(from saved: Session.Shape) {
-        guard essentials.isEmpty, let rows = saved.essentials, !rows.isEmpty else { return }
+        guard essentials.isEmpty else { return }
+        let home = Session.read(space: Space.firstID)
+        let rows = home.essentials ?? saved.essentials
+        guard let rows, !rows.isEmpty else { return }
         for entry in rows {
             guard let url = URL(string: entry.url) else { continue }
             let tab = Tab()

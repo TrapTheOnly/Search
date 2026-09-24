@@ -440,6 +440,13 @@ struct SpaceDot: View {
         guard browser.prefs.usesSpaces, !browser.makingSpace else { return .clear }
         return Spaces.chromeWash(browser.space.wash)
     }
+    private var spaceDotHelp: String {
+        var line = "\(browser.space.name) — ⌃1–⌃9, or two fingers \(browser.prefs.sidebar ? "sideways" : "up or down") over the tabs, to switch"
+        if browser.space.sharesSignIns == false {
+            line += ". Signed out: own cookies; Essentials stay with the profile (use a Profile to hide them)."
+        }
+        return line
+    }
 
     var body: some View {
         Button { SpaceMenu.show(for: browser) } label: {
@@ -464,7 +471,7 @@ struct SpaceDot: View {
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
-        .help("\(browser.space.name) — ⌃1–⌃9, or two fingers \(browser.prefs.sidebar ? "sideways" : "up or down") over the tabs, to switch")
+        .help(spaceDotHelp)
         .animation(Motion.quick, value: browser.space.wash)
         .onChange(of: key) { _, now in
             let symbol = symbol
@@ -539,6 +546,16 @@ enum SpaceMenu {
         if folder != nil {
             menu.addItem(item("Downloads to the Folder in Settings") { browser.setSpaceDownloads(here.id, to: nil) })
         }
+        if here.sharesSignIns == false {
+            menu.addItem(.separator())
+            let note = NSMenuItem(
+                title: "Essentials stay with this profile — use a Profile to isolate them",
+                action: nil,
+                keyEquivalent: ""
+            )
+            note.isEnabled = false
+            menu.addItem(note)
+        }
         if !here.isFirst {
             menu.addItem(.separator())
             menu.addItem(item("Delete “\(here.name)”…") {
@@ -593,7 +610,7 @@ enum Ask {
     static func newSpace(then: @escaping (String, Bool) -> Void) {
         let alert = NSAlert()
         alert.messageText = "New Space"
-        alert.informativeText = "Its own tabs. Signed in where your other spaces are, unless it starts afresh."
+        alert.informativeText = "Its own tabs. Signed in where your other spaces are, unless it starts afresh. Essentials stay with the profile either way — use a Profile for full isolation."
         let field = NSTextField(frame: NSRect(x: 0, y: 30, width: 260, height: 24))
         field.placeholderString = "Work"
         let fresh = NSButton(checkboxWithTitle: "Start signed out, with its own cookies", target: nil, action: nil)

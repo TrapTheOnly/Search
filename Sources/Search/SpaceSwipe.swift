@@ -206,7 +206,9 @@ struct NewSpaceCard: View {
     @FocusState private var typing: Bool
 
     private var saying: String {
-        shared ? "Signed in wherever your other spaces are." : "Its own cookies and sign-ins, starting from none."
+        shared
+            ? "Signed in wherever your other spaces are. Essentials stay with the profile."
+            : "Its own cookies and sign-ins. Essentials still show — use a Profile to hide them too."
     }
 
     var body: some View {
