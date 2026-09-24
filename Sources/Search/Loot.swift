@@ -1,9 +1,11 @@
 import Foundation
 import AppKit
+import WebKit
+import Combine
 
 // What you have kept. Downloads work already; this is only the memory of them,
 // so a file you fetched an hour ago is one click from the Finder rather than a
-// hunt through a folder.
+// hunt through a folder. `Fetch` is one still arriving — progress and a cancel.
 
 struct Keep: Codable, Identifiable, Equatable {
     var name: String
@@ -15,6 +17,70 @@ struct Keep: Codable, Identifiable, Equatable {
 
     var url: URL { URL(fileURLWithPath: path) }
     var stillThere: Bool { FileManager.default.fileExists(atPath: path) }
+}
+
+/// A download still under way. WebKit's `WKDownload` holds the bytes; this
+/// holds the name and how far along, so the panel can draw without asking
+/// the download for UI state on every frame.
+@MainActor
+final class Fetch: ObservableObject, Identifiable {
+    let id = UUID()
+    let download: WKDownload
+    @Published private(set) var name: String
+    @Published private(set) var fraction: Double = 0
+    @Published private(set) var received: Int64 = 0
+    @Published private(set) var expected: Int64 = 0
+
+    private var bag = Set<AnyCancellable>()
+
+    init(_ download: WKDownload, name: String = "Downloading…") {
+        self.download = download
+        self.name = name
+        let progress = download.progress
+        progress.publisher(for: \.fractionCompleted)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] value in self?.fraction = value }
+            .store(in: &bag)
+        progress.publisher(for: \.completedUnitCount)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] value in self?.received = value }
+            .store(in: &bag)
+        progress.publisher(for: \.totalUnitCount)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] value in self?.expected = value }
+            .store(in: &bag)
+        progress.publisher(for: \.fileURL)
+            .compactMap { $0 }
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] url in self?.name = url.lastPathComponent }
+            .store(in: &bag)
+    }
+
+    func titled(_ name: String) {
+        guard !name.isEmpty else { return }
+        self.name = name
+    }
+
+    func cancel() { download.cancel() }
+
+    /// "12 MB of 48 MB", or a percent when the size isn't known yet.
+    var progressSaid: String {
+        if expected > 0 {
+            return "\(Fetch.bytes.string(fromByteCount: received)) of \(Fetch.bytes.string(fromByteCount: expected))"
+        }
+        if received > 0 {
+            return Fetch.bytes.string(fromByteCount: received)
+        }
+        let percent = Int((fraction * 100).rounded())
+        return percent > 0 ? "\(percent)%" : "Starting…"
+    }
+
+    private static let bytes: ByteCountFormatter = {
+        let formatter = ByteCountFormatter()
+        formatter.countStyle = .file
+        formatter.allowedUnits = [.useKB, .useMB, .useGB]
+        return formatter
+    }()
 }
 
 @MainActor

@@ -74,7 +74,7 @@ extension Browser {
         if tab.noisy { return "playing sound" }
         if tab.floating || floating == tab.id { return "its video is out" }
         if web.cameraCaptureState != .none || web.microphoneCaptureState != .none { return "on a call" }
-        if downloading.contains(where: { $0.webView === web }) { return "downloading" }
+        if fetching.contains(where: { $0.download.webView === web }) { return "downloading" }
         // A sign-in window hands its answer back to the page that opened it.
         if active?.opener == tab.id { return "the page on screen came from it" }
         return nil

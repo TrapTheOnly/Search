@@ -194,38 +194,141 @@ struct DownloadsPanel: View {
     @ObservedObject var browser: Browser
     @ObservedObject var loot: Loot
 
+    @FocusState private var hunting: Bool
+    @State private var query = ""
+
+    private var shown: [Keep] {
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty else { return loot.kept }
+        return loot.kept.filter {
+            $0.name.localizedCaseInsensitiveContains(q)
+                || $0.from.localizedCaseInsensitiveContains(q)
+        }
+    }
+
+    private var empty: Bool { browser.fetching.isEmpty && shown.isEmpty }
+
     var body: some View {
         Plate("Downloads", width: 560, close: { browser.hoarding = false }) {
-            if loot.kept.isEmpty {
-                Card { Nothing("Nothing downloaded yet.") }
-            } else {
-                ScrollView(showsIndicators: false) {
-                    Card {
-                        ForEach(Array(loot.kept.enumerated()), id: \.element.id) { index, keep in
-                            if index > 0 { Rule() }
-                            Row(
-                                keep: keep,
-                                open: { loot.open(keep) },
-                                reveal: { loot.reveal(keep) },
-                                forget: { loot.forget(keep) }
-                            )
-                        }
-                    }
-                    .padding(.bottom, 2)
+            VStack(alignment: .leading, spacing: 14) {
+                if !loot.kept.isEmpty || !browser.fetching.isEmpty {
+                    Hunt(text: $query, prompt: "Search downloads", focus: $hunting)
                 }
-                .frame(maxHeight: 420)
+
+                if empty {
+                    Card {
+                        Nothing(
+                            loot.kept.isEmpty && browser.fetching.isEmpty
+                                ? "Nothing downloaded yet."
+                                : "Nothing matches."
+                        )
+                    }
+                } else {
+                    ScrollView(showsIndicators: false) {
+                        VStack(alignment: .leading, spacing: 14) {
+                            if !browser.fetching.isEmpty {
+                                VStack(alignment: .leading, spacing: 6) {
+                                    Caption("In progress")
+                                    Card {
+                                        ForEach(Array(browser.fetching.enumerated()), id: \.element.id) { index, fetch in
+                                            if index > 0 { Rule() }
+                                            LiveRow(fetch: fetch, cancel: { browser.cancel(fetch) })
+                                        }
+                                    }
+                                }
+                            }
+
+                            if !shown.isEmpty {
+                                VStack(alignment: .leading, spacing: 6) {
+                                    Caption(browser.fetching.isEmpty ? "Recent" : "History")
+                                    Card {
+                                        ForEach(Array(shown.enumerated()), id: \.element.id) { index, keep in
+                                            if index > 0 { Rule() }
+                                            Row(
+                                                keep: keep,
+                                                open: { loot.open(keep) },
+                                                reveal: { loot.reveal(keep) },
+                                                forget: { loot.forget(keep) }
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        .padding(.bottom, 2)
+                    }
+                    .frame(maxHeight: 420)
+                }
             }
         } foot: {
             HStack {
-                Text(loot.kept.isEmpty ? "Files land in \(browser.downloadsFolder.lastPathComponent)"
-                     : "Clearing the list leaves the files where they are")
+                Text(foot)
                     .font(.system(size: 12))
                     .foregroundStyle(Palette.muted)
                 Spacer()
+                Pill("Show folder") {
+                    NSWorkspace.shared.open(browser.downloadsFolder)
+                }
                 if !loot.kept.isEmpty {
                     Pill("Clear list") { loot.forgetAll() }
                 }
             }
+        }
+        .onAppear { hunting = loot.kept.count > 8 }
+    }
+
+    private var foot: String {
+        let folder = browser.downloadsFolder.lastPathComponent
+        if !browser.fetching.isEmpty {
+            let n = browser.fetching.count
+            return n == 1 ? "1 file arriving · \(folder)" : "\(n) files arriving · \(folder)"
+        }
+        if loot.kept.isEmpty {
+            return "Files land in \(folder)"
+        }
+        return "Clearing the list leaves the files where they are"
+    }
+
+    private struct LiveRow: View {
+        @ObservedObject var fetch: Fetch
+        let cancel: () -> Void
+
+        @State private var hovering = false
+
+        var body: some View {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 12) {
+                    Image(systemName: "arrow.down.circle")
+                        .font(.system(size: 13, weight: .regular))
+                        .foregroundStyle(Palette.ink)
+                        .frame(width: 18)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(fetch.name)
+                            .font(.system(size: 13))
+                            .foregroundStyle(Palette.ink)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Text(fetch.progressSaid)
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(Palette.muted)
+                            .lineLimit(1)
+                    }
+                    Spacer(minLength: 8)
+                    if hovering {
+                        Quick("Cancel", tint: .red.opacity(0.75), act: cancel)
+                    }
+                }
+                ProgressView(value: min(max(fetch.fraction, 0), 1))
+                    .progressViewStyle(.linear)
+                    .tint(Palette.ink)
+                    .padding(.leading, 30)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(hovering ? Palette.hover : .clear)
+            .contentShape(Rectangle())
+            .onHover { hovering = $0 }
+            .animation(Motion.quick, value: hovering)
         }
     }
 
@@ -256,7 +359,10 @@ struct DownloadsPanel: View {
                 }
                 Spacer(minLength: 8)
                 if hovering {
-                    if keep.stillThere { Quick("Show in Finder", act: reveal) }
+                    if keep.stillThere {
+                        Quick("Open", act: open)
+                        Quick("Show in Finder", act: reveal)
+                    }
                     Quick("Remove", tint: .red.opacity(0.75), act: forget)
                 }
             }
@@ -270,3 +376,4 @@ struct DownloadsPanel: View {
         }
     }
 }
+
