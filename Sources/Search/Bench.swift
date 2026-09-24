@@ -234,7 +234,30 @@ final class Bench {
 
         switch verb {
         case "tabs":
-            answer(["tabs": browser.tabs.map(describe)])
+            answer([
+                "tabs": browser.tabs.map(describe),
+                "essentials": browser.essentials.map(describe),
+                "pins": browser.tabs.filter { $0.pin != nil }.map(describe),
+            ])
+
+        case "pin":
+            guard Store.testing else { answer(["error": "pin only works on a --test run"]); return }
+            guard let tab = find(request, in: browser) ?? browser.active else { answer(missing(request)); return }
+            browser.pin(tab)
+            answer(describe(tab))
+
+        case "unpin":
+            guard Store.testing else { answer(["error": "unpin only works on a --test run"]); return }
+            guard let tab = find(request, in: browser) ?? browser.active else { answer(missing(request)); return }
+            browser.unpin(tab)
+            answer(describe(tab))
+
+        case "essential":
+            guard Store.testing else { answer(["error": "essential only works on a --test run"]); return }
+            guard let tab = find(request, in: browser) ?? browser.active else { answer(missing(request)); return }
+            let on = request["on"] as? Bool ?? true
+            if on { browser.makeEssential(tab) } else { browser.removeEssential(tab) }
+            answer(describe(tab))
 
         case "open":
             guard let url = (request["url"] as? String).flatMap(Address.url(from:)) else {
@@ -1217,7 +1240,7 @@ final class Bench {
 
         default:
             answer(["error": "unknown command “\(verb)”", "commands": [
-                "tabs", "open", "go", "close", "wait", "sleep", "select", "text", "eval", "click", "type", "submit", "shot", "probe", "key", "resize", "hit", "film", "window", "pages", "picture", "place", "field", "bookmark", "menu", "keyeq", "pull", "space", "strip", "column", "site", "ui",
+                "tabs", "open", "go", "close", "wait", "sleep", "select", "text", "eval", "click", "type", "submit", "shot", "probe", "key", "resize", "hit", "film", "window", "pages", "picture", "place", "field", "bookmark", "menu", "keyeq", "pull", "space", "strip", "column", "site", "ui", "pin", "unpin", "essential",
             ]])
         }
     }
@@ -1336,7 +1359,10 @@ final class Bench {
     /// `window.open` carries no flask and would be out of reach otherwise.
     private func find(_ request: [String: Any], in browser: Browser) -> Tab? {
         guard let ref = (request["id"] as? String)?.lowercased(), !ref.isEmpty else { return nil }
-        return browser.tabs.first { (Store.testing || $0.bench) && $0.id.uuidString.lowercased().hasPrefix(ref) }
+        let match: (Tab) -> Bool = { (Store.testing || $0.bench) && $0.id.uuidString.lowercased().hasPrefix(ref) }
+        if let tab = browser.tabs.first(where: match) { return tab }
+        if Store.testing, let tab = browser.essentials.first(where: match) { return tab }
+        return nil
     }
 
     private func missing(_ request: [String: Any]) -> [String: Any] {
@@ -1358,6 +1384,8 @@ final class Bench {
             "shy": tab.shy,
             "noisy": tab.noisy,
             "muted": tab.muted,
+            "pin": tab.pin ?? "",
+            "essential": tab.essential,
             "extensions": { if #available(macOS 15.4, *) { return tab.carriesExtensions } else { return false } }(),
         ]
     }

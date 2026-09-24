@@ -117,12 +117,18 @@ struct SearchApp: App {
                     .keyboardShortcut("k")
                 Divider()
                 if let tab = browser.active {
-                    if tab.pin == nil {
-                        Button("Pin Tab") { browser.pin(tab) }
+                    if tab.pin == nil && !tab.essential {
+                        Button("Pin Tab to This Space") { browser.pin(tab) }
                             .disabled(tab.isBlank)
-                    } else {
+                    } else if tab.pin != nil {
                         Button("Change Letter") { browser.editLetter(tab) }
-                        Button("Unpin Tab") { browser.unpin(tab) }
+                        Button(tab.essential ? "Unpin Tab" : "Unpin Tab from This Space") { browser.unpin(tab) }
+                    }
+                    if tab.essential {
+                        Button("Remove from Essentials") { browser.removeEssential(tab) }
+                    } else {
+                        Button("Make Essential (All Spaces)") { browser.makeEssential(tab) }
+                            .disabled(tab.isBlank)
                     }
                 }
                 Button("Rename Tab") { if let tab = browser.active { browser.beginTabRename(tab) } }

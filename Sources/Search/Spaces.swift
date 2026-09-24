@@ -270,7 +270,7 @@ extension Browser {
         // The row on screen is parked as it is. Its sound stops: a space
         // you left is not one you are listening to.
         for tab in tabs where tab.built != nil { tab.web.pauseAllMediaPlayback() }
-        parked[spaceID] = Parked(tabs: tabs, active: activeID)
+        parked[spaceID] = Parked(tabs: Self.orderSpacePins(tabs), active: activeID)
 
         makingSpace = false
         spaceID = id
