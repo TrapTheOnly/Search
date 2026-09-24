@@ -76,14 +76,40 @@ final class Browser: NSObject, ObservableObject {
     @discardableResult
     func takeBookmarks(from source: Chromium.Source) -> Int {
         let found = Chromium.bookmarks(in: source)
-        bookmarks.take(found, from: source.name)
+        return adoptBookmarks(found, from: source.name) {
+            Chromium.icons(in: source, for: $0)
+        }
+    }
+
+    /// Firefox-family bookmarks from places.sqlite. No favicon DB here yet —
+    /// the pages pick up icons the usual way after they're opened.
+    @discardableResult
+    func takeBookmarks(from source: Firefox.Source) -> Int {
+        adoptBookmarks(Firefox.bookmarks(in: source), from: source.name)
+    }
+
+    @discardableResult
+    func takeBookmarks(from source: ImportSource) -> Int {
+        switch source {
+        case .chromium(let chromium): return takeBookmarks(from: chromium)
+        case .firefox(let firefox): return takeBookmarks(from: firefox)
+        }
+    }
+
+    private func adoptBookmarks(
+        _ found: [Bookmark],
+        from name: String,
+        icons: (([URL]) -> [String: Data])? = nil
+    ) -> Int {
+        bookmarks.take(found, from: name)
         let count = Bookmarks.count(found)
-        announce(count == 0 ? "No bookmarks in \(source.name)" : "\(count) bookmarks from \(source.name)")
+        announce(count == 0 ? "No bookmarks in \(name)" : "\(count) bookmarks from \(name)")
+        guard let icons else { return count }
         let urls = Bookmarks.urls(found)
         DispatchQueue.global(qos: .utility).async {
-            let icons = Chromium.icons(in: source, for: urls)
+            let images = icons(urls)
             Task { @MainActor in
-                for (host, data) in icons { await Favicons.shared.adopt(data, for: host) }
+                for (host, data) in images { await Favicons.shared.adopt(data, for: host) }
                 self.objectWillChange.send()
             }
         }

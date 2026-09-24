@@ -15,7 +15,7 @@ struct WelcomePanel: View {
     // finding them looks through each browser's folders, and as an initial
     // value that ran every time the panel was made, the first window's
     // included, for a page that isn't showing yet.
-    @State private var source: Chromium.Source?
+    @State private var source: ImportSource?
     @State private var wantsPasswords = true
     @State private var wantsHistory = true
     @State private var wantsBookmarks = true
@@ -80,12 +80,13 @@ struct WelcomePanel: View {
         VStack(alignment: .leading, spacing: 22) {
             heading("Bring things over.", "Passwords go into your keychain, bookmarks into the menu, and history means the address field already knows where you go. Nothing in the other browser changes.")
 
-            let sources = Chromium.installed()
+            let sources = ImportSource.installed()
             if sources.isEmpty {
                 Text("No other browser found on this Mac — nothing to bring.")
                     .font(.system(size: 13))
                     .foregroundStyle(Palette.faint)
             } else {
+                let picked = source ?? sources[0]
                 VStack(alignment: .leading, spacing: 14) {
                     if sources.count > 1 {
                         Segmented(
@@ -97,14 +98,18 @@ struct WelcomePanel: View {
                             .font(.system(size: 13))
                             .foregroundStyle(Palette.muted)
                     }
-                    Choice("Passwords", "macOS will ask once for that browser's keychain key", on: $wantsPasswords)
+                    if picked.offersPasswords {
+                        Choice("Passwords", "macOS will ask once for that browser's keychain key", on: $wantsPasswords)
+                    }
                     Choice("Bookmarks", "Folders and all, behind the bookmark button", on: $wantsBookmarks)
-                    Choice("History", "The last few thousand places, for finishing addresses", on: $wantsHistory)
+                    if picked.offersHistory {
+                        Choice("History", "The last few thousand places, for finishing addresses", on: $wantsHistory)
+                    }
                 }
 
                 HStack(spacing: 12) {
                     Big(bringing ? "Bringing…" : "Bring them in", filled: true) { bringAll() }
-                        .disabled(bringing || brought != nil || !(wantsPasswords || wantsHistory || wantsBookmarks))
+                        .disabled(bringing || brought != nil || !canBring(picked))
                     if bringing { Ring(size: 10) }
                     if let brought {
                         Text(brought)
@@ -213,15 +218,21 @@ struct WelcomePanel: View {
 
     // MARK: - doing
 
+    private func canBring(_ source: ImportSource) -> Bool {
+        wantsBookmarks
+            || (source.offersPasswords && wantsPasswords)
+            || (source.offersHistory && wantsHistory)
+    }
+
     private func bringAll() {
-        guard let source = source ?? Chromium.installed().first else { return }
+        guard let source = source ?? ImportSource.installed().first else { return }
         bringing = true
         var lines: [String] = []
         let group = DispatchGroup()
-        if wantsPasswords {
+        if source.offersPasswords, wantsPasswords, case .chromium(let chromium) = source {
             group.enter()
             DispatchQueue.global(qos: .userInitiated).async {
-                let outcome = Result { try Chromium.read(source) }
+                let outcome = Result { try Chromium.read(chromium) }
                 DispatchQueue.main.async {
                     switch outcome {
                     case .success(let found):
@@ -246,9 +257,9 @@ struct WelcomePanel: View {
         if wantsBookmarks {
             lines.append("\(browser.takeBookmarks(from: source)) bookmarks")
         }
-        if wantsHistory {
+        if source.offersHistory, wantsHistory, case .chromium(let chromium) = source {
             group.enter()
-            browser.takePlaces(from: source) { count in
+            browser.takePlaces(from: chromium) { count in
                 lines.append("\(count) places")
                 group.leave()
             }
