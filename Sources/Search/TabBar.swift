@@ -57,10 +57,10 @@ struct TabBar: View {
                             ScrollViewReader { reader in
                                 ScrollView(.horizontal, showsIndicators: false) {
                                     HStack(spacing: Metrics.tabGap) {
-                                        ForEach(Array(browser.tabs.enumerated()), id: \.element.id) { index, tab in
+                                        ForEach(Array(browser.strip.enumerated()), id: \.element.id) { index, tab in
                                             // A pinned square moves among pinned squares, a title
                                             // among titles: each has its own stride.
-                                            let step = (tab.pin != nil ? Metrics.pinWidth : width(in: geo.size.width)) + Metrics.tabGap
+                                            let step = (tab.pin != nil || tab.essential ? Metrics.pinWidth : width(in: geo.size.width)) + Metrics.tabGap
                                             TabPill(
                                                 browser: browser,
                                                 prefs: browser.prefs,
@@ -71,8 +71,17 @@ struct TabBar: View {
                                                 pill: pill,
                                                 close: { browser.close(tab) }
                                             )
-                                            .modifier(Carried(index: index, count: browser.tabs.count, step: step, vertical: false, space: "strip") {
-                                                browser.move(tab, to: $0)
+                                            .modifier(Carried(index: index, count: browser.strip.count, step: step, vertical: false, space: "strip") { target in
+                                                if tab.essential || target < browser.essentials.count {
+                                                    browser.movePin(tab, to: target)
+                                                } else if browser.strip.indices.contains(target) {
+                                                    let dest = browser.strip[target]
+                                                    if dest.essential {
+                                                        browser.movePin(tab, to: target)
+                                                    } else if let at = browser.tabs.firstIndex(where: { $0.id == dest.id }) {
+                                                        browser.move(tab, to: at)
+                                                    }
+                                                }
                                             })
                                             .id(tab.id)
                                         }
@@ -168,6 +177,7 @@ struct TabBar: View {
         // and the tabs appeared to jump aside.
         .animation(Motion.glide, value: browser.editingTab)
         .animation(Motion.settle, value: browser.tabs.map(\.id))
+        .animation(Motion.settle, value: browser.essentials.map(\.id))
     }
 
     // MARK: - the spaces, one above the other
@@ -194,9 +204,10 @@ struct TabBar: View {
             let row = space.id == browser.spaceID
                 ? Parked(tabs: browser.tabs, active: browser.activeID)
                 : browser.parked[space.id] ?? Parked(tabs: [], active: nil)
-            let each = width(in: strip, pinned: row.tabs.filter { $0.pin != nil }.count, count: row.tabs.count)
+            let shown = browser.essentials + row.tabs
+            let each = width(in: strip, pinned: shown.filter { $0.pin != nil }.count, count: shown.count)
             HStack(spacing: Metrics.tabGap) {
-                ForEach(row.tabs) { tab in
+                ForEach(shown) { tab in
                     TabPill(
                         browser: browser,
                         prefs: browser.prefs,
@@ -243,11 +254,11 @@ struct TabBar: View {
     private func content(in strip: CGFloat) -> CGFloat {
         let each = width(in: strip)
         let pinned = CGFloat(browser.pinnedCount)
-        let loose = CGFloat(browser.tabs.count) - pinned
+        let loose = CGFloat(browser.tabs.count - browser.spacePins)
         var total = pinned * Metrics.pinWidth + loose * each
-            + CGFloat(max(0, browser.tabs.count - 1)) * Metrics.tabGap
-        if let id = browser.editingTab, let tab = browser.tabs.first(where: { $0.id == id }) {
-            total += min(340, strip - Metrics.lights - 12) - (tab.pin != nil ? Metrics.pinWidth : each)
+            + CGFloat(max(0, browser.strip.count - 1)) * Metrics.tabGap
+        if let id = browser.editingTab, let tab = browser.strip.first(where: { $0.id == id }) {
+            total += min(340, strip - Metrics.lights - 12) - (tab.pin != nil || tab.essential ? Metrics.pinWidth : each)
         }
         return total
     }
@@ -269,7 +280,7 @@ struct TabBar: View {
     /// mark and its air. Past that, the run scrolls. The pinned squares take
     /// their room off the top.
     private func width(in strip: CGFloat) -> CGFloat {
-        width(in: strip, pinned: browser.pinnedCount, count: browser.tabs.count)
+        width(in: strip, pinned: browser.pinnedCount, count: browser.strip.count)
     }
 
     private func width(in strip: CGFloat, pinned pins: Int, count: Int) -> CGFloat {
@@ -351,7 +362,7 @@ private struct TabPill: View {
     @State private var shake: CGFloat = 0
 
     private var editing: Bool { browser.editingTab == tab.id }
-    private var pinned: Bool { tab.pin != nil && !editing }
+    private var pinned: Bool { (tab.pin != nil || tab.essential) && !editing }
     /// Too narrow for a title: the site's mark alone, the title in the
     /// tooltip, and ⌘W or the menu to close it — a cross on something this
     /// small would be what a click to pick the tab lands on.
@@ -749,12 +760,18 @@ struct TabMenu: View {
     let close: () -> Void
 
     var body: some View {
-        if tab.pin == nil {
+        if tab.pin == nil && !tab.essential {
             Button("Pin") { browser.pin(tab) }
                 .disabled(tab.isBlank)
         } else {
             Button("Change Letter") { browser.editLetter(tab) }
             Button("Unpin") { browser.unpin(tab) }
+        }
+        if tab.essential {
+            Button("Remove from Essentials") { browser.removeEssential(tab) }
+        } else {
+            Button("Make Essential") { browser.makeEssential(tab) }
+                .disabled(tab.isBlank)
         }
         Divider()
         Button("Rename") { browser.beginTabRename(tab) }
@@ -768,7 +785,7 @@ struct TabMenu: View {
             if browser.activeID != tab.id { browser.select(tab) }
             browser.beginTabEdit(tab)
         }
-        .disabled(tab.isBlank || tab.address == nil || tab.pin != nil)
+        .disabled(tab.isBlank || tab.address == nil || tab.pin != nil || tab.essential)
         Button("Copy Address") {
             browser.select(tab)
             browser.copyAddress()
@@ -783,7 +800,7 @@ struct TabMenu: View {
         Divider()
         Button("Close Tab", action: close)
         Button("Close Other Tabs") { browser.closeOthers(but: tab) }
-            .disabled(browser.tabs.count < 2)
+            .disabled(browser.strip.count < 2)
         // ⌘⇧T, and the History menu's Recently Closed, where few think to
         // look for it: here too, where tabs are closed.
         Button("Reopen Closed Tab") { browser.reopen() }

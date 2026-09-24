@@ -16,6 +16,9 @@ enum Session {
     struct Shape: Codable {
         var tabs: [Entry]
         var active: Int
+        /// Pins that follow you into every space. Written on every space's
+        /// file so whichever one you open has the list; old files omit it.
+        var essentials: [Entry]?
     }
 
     /// The first space's is the session there always was; each other space

@@ -98,6 +98,7 @@ struct SideBar: View {
         .animation(Motion.glide, value: browser.activeID)
         .animation(Motion.glide, value: browser.editingTab)
         .animation(Motion.settle, value: browser.tabs.map(\.id))
+        .animation(Motion.settle, value: browser.essentials.map(\.id))
         .animation(Motion.settle, value: browser.pinnedCount)
     }
 
@@ -259,13 +260,13 @@ struct SideBar: View {
         let pinRows = pins == 0 ? 0 : (pins + cols - 1) / cols
         let pinBlock = pinRows == 0 ? 0
             : CGFloat(pinRows) * pinHeight + CGFloat(pinRows - 1) * SideBar.pinGap + 10
-        let loose = CGFloat(browser.tabs.count - pins) * (SideBar.row + SideBar.gap)
+        let loose = CGFloat(browser.tabs.count - browser.spacePins) * (SideBar.row + SideBar.gap)
         return Metrics.strip + pinBlock + loose + SideBar.row + 8
     }
 
     // MARK: - the pinned squares
 
-    private var pinnedTabs: [Tab] { browser.tabs.filter { $0.pin != nil } }
+    private var pinnedTabs: [Tab] { browser.essentials + browser.tabs.filter { $0.pin != nil } }
     private var looseTabs: [Tab] { browser.tabs.filter { $0.pin == nil } }
 
     /// Three columns is the block's own shape — up to six pins, that's two
@@ -380,7 +381,7 @@ struct SideBar: View {
                 let target = pinTarget(from: pinFrom, moved: pinDelta(columns: columns, stepX: stepX, stepY: stepY))
                 if target != index {
                     withAnimation(Motion.settle) {
-                        browser.move(tab, to: target)
+                        browser.movePin(tab, to: target)
                     }
                 }
             }
@@ -411,7 +412,7 @@ struct SideBar: View {
                 // Positions here are among the loose rows; the pinned block
                 // sits in front of them in the real list.
                 .modifier(Carried(index: index, count: looseTabs.count, step: step, vertical: true, space: "rows") {
-                    browser.move(tab, to: $0 + browser.pinnedCount)
+                    browser.move(tab, to: $0 + browser.spacePins)
                 })
             }
         }
