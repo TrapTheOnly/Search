@@ -35,6 +35,12 @@ final class Bookmarks: ObservableObject {
 
     init() { load() }
 
+    /// Read the file again — another profile's list, after a switch.
+    func reload() {
+        roots = []
+        load()
+    }
+
     var isEmpty: Bool { roots.isEmpty }
 
     /// How many sites, folders included.

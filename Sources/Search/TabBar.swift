@@ -39,7 +39,8 @@ struct TabBar: View {
                     .frame(width: Metrics.lights)
 
                 HStack(spacing: Metrics.tabGap) {
-                    // The space on screen, first, when there are spaces.
+                    // Who you are, then the space on screen when there are spaces.
+                    ProfileDot(browser: browser)
                     if browser.prefs.usesSpaces { SpaceDot(browser: browser) }
 
                     // The tabs, in a run of their own. While they fit, it is
@@ -298,8 +299,10 @@ struct TabBar: View {
         return max(0, strip - Metrics.lights - dot - 12 - Metrics.plusWidth - far - 3 * Metrics.tabGap)
     }
 
-    /// What the space's dot takes before the tabs, when there are spaces.
-    private var dot: CGFloat { browser.prefs.usesSpaces ? SpaceDot.width + Metrics.tabGap : 0 }
+    /// What the profile (and the space, when there are spaces) take before the tabs.
+    private var dot: CGFloat {
+        ProfileDot.width + Metrics.tabGap + (browser.prefs.usesSpaces ? SpaceDot.width + Metrics.tabGap : 0)
+    }
 
     /// Every loose tab is the same width, so the cross is always in the same
     /// place. Past a dozen or so they start giving ground; too narrow for a

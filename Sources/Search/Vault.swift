@@ -23,7 +23,17 @@ struct Login: Identifiable, Equatable, Hashable {
 enum Vault {
     /// What every item of ours is tagged with. A test run tags its own, so a
     /// password saved while trying something never sits among the real ones.
-    private static let label = Store.world.map { "Search (\($0))" } ?? "Search"
+    /// Personal keeps that same label, so existing passwords stay findable.
+    /// Another profile adds its id; the test-world prefix is never rewritten.
+    private static var label: String {
+        tag(for: Store.profileID)
+    }
+
+    private static func tag(for profile: UUID) -> String {
+        let base = Store.world.map { "Search (\($0))" } ?? "Search"
+        guard profile != Profile.firstID else { return base }
+        return base + " · " + profile.uuidString
+    }
 
     // MARK: - reading
 
@@ -120,6 +130,7 @@ enum Vault {
             kSecClass as String: kSecClassInternetPassword,
             kSecAttrServer as String: host,
             kSecAttrAccount as String: user,
+            kSecAttrLabel as String: label,
         ]
         var fields: [String: Any] = [
             kSecValueData as String: data,
@@ -146,6 +157,15 @@ enum Vault {
             kSecClass as String: kSecClassInternetPassword,
             kSecAttrServer as String: host,
             kSecAttrAccount as String: user,
+            kSecAttrLabel as String: label,
+        ] as CFDictionary)
+    }
+
+    /// Every password this profile kept, when the profile itself is deleted.
+    static func erase(profile id: UUID) {
+        SecItemDelete([
+            kSecClass as String: kSecClassInternetPassword,
+            kSecAttrLabel as String: tag(for: id),
         ] as CFDictionary)
     }
 

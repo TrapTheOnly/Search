@@ -95,7 +95,33 @@ enum Store {
     }()
 
     static func file(_ name: String) -> URL {
-        folder.appendingPathComponent(name)
+        // Session, bookmarks, history, hidden elements and spaces belong
+        // to the profile on screen. Everything else — downloads, the crash
+        // log, the bench socket, the list of profiles itself — stays at the
+        // folder's root, so a test world and the real browser keep one of each.
+        (profileOwned(name) ? profileFolder : folder).appendingPathComponent(name)
+    }
+
+    /// The profile on screen. Personal until one is chosen. Existing files
+    /// in `folder` are Personal's, so the first run after profiles does not
+    /// move anything.
+    static var profileID: UUID = Profiles.peekCurrent()
+
+    /// Personal lives in `folder` itself. Any other profile gets a folder
+    /// of its own under Profiles/, made the first time it is asked for.
+    static var profileFolder: URL {
+        let url = profileID == Profile.firstID
+            ? folder
+            : folder.appendingPathComponent("Profiles/\(profileID.uuidString)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }
+
+    private static func profileOwned(_ name: String) -> Bool {
+        name == "session.json" || name.hasPrefix("session-")
+            || name == "bookmarks.json" || name == "history.json"
+            || name == "spaces.json" || name == "hidden.json"
+            || name == "extensions-state.json"
     }
 
     /// A file that didn't decode is set aside rather than overwritten the
