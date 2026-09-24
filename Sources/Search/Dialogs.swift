@@ -244,14 +244,5 @@ enum Dialogs {
     }
 
     /// Where a self-signed certificate is an ordinary thing to meet.
-    static func isLocal(_ host: String) -> Bool {
-        if host == "localhost" || host.hasSuffix(".local") || host.hasSuffix(".localhost") { return true }
-        if host == "127.0.0.1" || host == "::1" || host == "0.0.0.0" { return true }
-        let parts = host.split(separator: ".").compactMap { Int($0) }
-        guard parts.count == 4 else { return false }
-        if parts[0] == 10 { return true }
-        if parts[0] == 192, parts[1] == 168 { return true }
-        if parts[0] == 172, (16...31).contains(parts[1]) { return true }
-        return false
-    }
+    static func isLocal(_ host: String) -> Bool { Address.isLocal(host) }
 }

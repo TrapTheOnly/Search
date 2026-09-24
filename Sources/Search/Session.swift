@@ -18,6 +18,35 @@ enum Session {
         var active: Int
     }
 
+    /// One live tab, as `writeSession` sees it: enough to decide whether it
+    /// is written, and where the selection lands after the ones that aren't.
+    struct Live {
+        var id: UUID
+        var shy: Bool
+        var bench: Bool
+        var url: URL?
+        var title: String
+        var pin: String?
+        var name: String?
+    }
+
+    /// Private, bench, and non-http tabs stay out of the file. `active` is
+    /// an index into what remains, so a bench tab sitting before the one
+    /// you were looking at does not shift the restored selection.
+    static func compact(_ tabs: [Live], active: UUID?) -> Shape {
+        let kept = tabs.compactMap { tab -> (UUID, Entry)? in
+            guard !tab.shy, !tab.bench else { return nil }
+            guard let url = tab.url, url.scheme?.hasPrefix("http") == true else { return nil }
+            return (tab.id, Entry(
+                url: url.absoluteString, title: tab.title, pin: tab.pin, name: tab.name
+            ))
+        }
+        return Shape(
+            tabs: kept.map(\.1),
+            active: kept.firstIndex { $0.0 == active } ?? 0
+        )
+    }
+
     /// The first space's is the session there always was; each other space
     /// keeps its own beside it.
     private static func file(_ space: UUID) -> URL {
@@ -42,7 +71,12 @@ enum Session {
         return shape
     }
 
-    /// `now` writes on the calling thread. Quitting doesn't wait for a
+    /// One writer for every session file. A utility write that left after a
+    /// quit write was scheduled would otherwise reach the disk last and put
+    /// yesterday back.
+    private static let writer = DispatchQueue(label: "search.session.write")
+
+    /// `now` waits for the writer. Quitting doesn't wait for a
     /// background queue, and a session handed to one on the way out is a
     /// session that may never reach the disk.
     static func write(now: Bool = false, space: UUID = Space.firstID, _ shape: Shape) {
@@ -55,9 +89,9 @@ enum Session {
             try? data.write(to: file, options: .atomic)
         }
         if now {
-            put()
+            writer.sync(execute: put)
         } else {
-            DispatchQueue.global(qos: .utility).async(execute: put)
+            writer.async(execute: put)
         }
     }
 }

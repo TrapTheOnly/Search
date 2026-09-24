@@ -85,9 +85,11 @@ final class Curtain: ObservableObject {
     private static var file: URL { Store.file("hidden.json") }
 
     private func load() {
-        guard let data = try? Data(contentsOf: Curtain.file),
-              let stored = try? JSONDecoder().decode([String: [Veil]].self, from: data)
-        else { return }
+        guard let data = try? Data(contentsOf: Curtain.file) else { return }
+        guard let stored = try? JSONDecoder().decode([String: [Veil]].self, from: data) else {
+            Store.quarantine(Curtain.file)
+            return
+        }
         byHost = stored
     }
 

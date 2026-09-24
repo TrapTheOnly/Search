@@ -4,13 +4,21 @@ import PackageDescription
 let package = Package(
     name: "Search",
     platforms: [.macOS(.v14)],
+    products: [
+        .executable(name: "Search", targets: ["SearchApp"])
+    ],
     targets: [
-        .executableTarget(
+        // The window and its types live here. The product is still named
+        // Search: a thin executable calls through.
+        .target(
             name: "Search",
             path: "Sources/Search",
-            // Same reasoning as the canvas app next door: the whole interface is
-            // main-thread by nature, and Swift 6's strict isolation buys nothing
-            // here but ceremony.
+            swiftSettings: [.swiftLanguageMode(.v5)]
+        ),
+        .executableTarget(
+            name: "SearchApp",
+            dependencies: ["Search"],
+            path: "Sources/SearchApp",
             swiftSettings: [.swiftLanguageMode(.v5)]
         )
     ]

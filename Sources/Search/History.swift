@@ -24,15 +24,32 @@ struct Suggestion: Identifiable, Equatable {
         case search
     }
 
-    var id: String { key }
+    /// The title alone is not a name: two tabs called Inbox, or two visits
+    /// that share a pretty address, would otherwise be one row.
+    var id: String {
+        if let tab { return "tab:\(tab.uuidString)" }
+        return "\(key)\u{1}\(url.absoluteString)"
+    }
 }
 
-private struct Visit: Codable {
+struct Visit: Codable, Equatable, Sendable {
     var url: String
     var key: String
     var title: String
     var count: Int
     var last: Date
+}
+
+/// The history file as rows, then as a dictionary. Duplicate keys used to
+/// trap (`uniqueKeysWithValues`); one row is kept.
+enum HistoryFile {
+    static func decode(_ data: Data) -> [Visit]? {
+        try? JSONDecoder().decode([Visit].self, from: data)
+    }
+
+    static func index(_ list: [Visit]) -> [String: Visit] {
+        Dictionary(list.map { ($0.key, $0) }, uniquingKeysWith: { first, _ in first })
+    }
 }
 
 @MainActor
@@ -277,11 +294,11 @@ final class History: ObservableObject {
 
     private func load() {
         guard let data = try? Data(contentsOf: History.file) else { return }
-        guard let list = try? JSONDecoder().decode([Visit].self, from: data) else {
+        guard let list = HistoryFile.decode(data) else {
             Store.quarantine(History.file)
             return
         }
-        visits = Dictionary(uniqueKeysWithValues: list.map { ($0.key, $0) })
+        visits = HistoryFile.index(list)
     }
 
     /// Coalesced: a busy minute of browsing writes the file once, not thirty

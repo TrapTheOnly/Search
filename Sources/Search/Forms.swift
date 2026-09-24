@@ -11,6 +11,10 @@ import WebKit
 
 final class FormRelay: NSObject, WKScriptMessageHandler {
     static let name = "officeForms"
+    /// Isolation from the page: fill and detection live here, not on
+    /// window.__officeForms in the page's own world, which the page can replace.
+    static let worldName = "officeForms"
+    static let world = WKContentWorld.world(name: worldName)
 
     weak var tab: Tab?
 
@@ -153,12 +157,22 @@ final class FormRelay: NSObject, WKScriptMessageHandler {
         },
         // Whether there is still a sign-in on the page. Asked after a
         // password went out, to tell a sign-in that took from one refused.
-        hasPassword: function () { return !!pair(); }
+        hasPassword: function () { return !!pair(); },
+        // Still a sign-in or a forgot-password page, even if the box is gone.
+        isAuthFlow: function () {
+          var path = (location.pathname || '').toLowerCase();
+          var search = (location.search || '').toLowerCase();
+          var title = (document.title || '').toLowerCase();
+          var hay = path + ' ' + search + ' ' + title;
+          if (/forgot|reset[-_\\s]?password|recover[-_\\s]?password|change[-_\\s]?password/.test(hay)) return true;
+          if (/\\/(log[-_]?in|sign[-_]?in|sign[-_]?up|register|signin|signup)(\\/|$)/.test(path)) return true;
+          if (/\\b(log[-_]?in|sign[-_]?in|sign[-_]?up)\\b/.test(title)) return true;
+          return false;
+        }
       };
 
-      // What is in the boxes when they are sent. Said every time — a click
-      // on "show password" says it too — because the browser only listens
-      // once the page has moved on, and keeps the last thing it heard.
+      // What is in the boxes when they are sent. A real submit only — a click
+      // on any button is also "forgot password" and closing a modal.
       function offer() {
         var both = pair();
         if (!both || !both.pass.value) return;
@@ -175,13 +189,14 @@ final class FormRelay: NSObject, WKScriptMessageHandler {
         var both = pair();
         if (both && (document.activeElement === both.pass || document.activeElement === both.user)) offer();
       }, true);
-      // Plenty of sign-in buttons aren't in a form and never fire submit.
       document.addEventListener('click', function (e) {
         var el = e.target;
         if (!el || !el.closest) return;
-        if (el.closest('button, input[type="submit"], [role="button"]')) {
-          setTimeout(offer, 0);
-        }
+        var hit = el.closest('button, input[type="submit"]');
+        if (!hit) return;
+        var type = (hit.getAttribute('type') || (hit.tagName.toLowerCase() === 'button' ? 'submit' : '')).toLowerCase();
+        if (type !== 'submit') return;
+        setTimeout(offer, 0);
       }, true);
 
       var told = false;

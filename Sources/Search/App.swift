@@ -4,7 +4,14 @@ import AppKit
 // A window, a row of titles, and a field. Typing an address gets you a page;
 // there is nothing else to learn and nothing else to press.
 
-@main
+/// The executable calls this. The window itself stays in this module so the
+/// types it needs do not have to be public.
+public enum SearchRuntime {
+    public static func main() {
+        SearchApp.main()
+    }
+}
+
 struct SearchApp: App {
     @StateObject private var browser = Browser()
     /// Links from other apps, and the Dock icon.

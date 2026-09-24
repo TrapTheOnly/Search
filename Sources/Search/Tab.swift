@@ -334,6 +334,7 @@ final class Tab: ObservableObject, Identifiable {
         controller.removeScriptMessageHandler(forName: ScrollRelay.name)
         controller.removeScriptMessageHandler(forName: VeilRelay.name)
         controller.removeScriptMessageHandler(forName: FormRelay.name)
+        controller.removeScriptMessageHandler(forName: FormRelay.name, contentWorld: FormRelay.world)
         controller.removeScriptMessageHandler(forName: ImageRelay.name)
         controller.removeScriptMessageHandler(forName: StoreRelay.name)
         controller.removeScriptMessageHandler(forName: PasskeyRelay.name)
@@ -341,7 +342,7 @@ final class Tab: ObservableObject, Identifiable {
         controller.add(veils_, name: VeilRelay.name)
         controller.add(images, name: ImageRelay.name)
         controller.add(shop, name: StoreRelay.name)
-        controller.add(forms, name: FormRelay.name)
+        controller.add(forms, contentWorld: FormRelay.world, name: FormRelay.name)
         controller.addScriptMessageHandler(passkeyRelay, contentWorld: .page, name: PasskeyRelay.name)
         Shield.shared.protect(controller)
         built = web
@@ -427,7 +428,7 @@ final class Tab: ObservableObject, Identifiable {
             WKUserScript(source: Veiling.picker, injectionTime: .atDocumentStart, forMainFrameOnly: true)
         )
         controller.addUserScript(
-            WKUserScript(source: FormRelay.script, injectionTime: .atDocumentEnd, forMainFrameOnly: true)
+            WKUserScript(source: FormRelay.script, injectionTime: .atDocumentEnd, forMainFrameOnly: true, in: FormRelay.world)
         )
         if AutoScroll.on {
             controller.addUserScript(
@@ -514,8 +515,9 @@ final class Tab: ObservableObject, Identifiable {
     }
 
     /// The page has moved on — a new document has loaded, or the sign-in
-    /// fields have gone. If a password went out recently and there is no
-    /// longer a box for it, that is a sign-in that took.
+    /// fields have gone. A password is offered only after a real submit, and
+    /// only when the next page is still this site, the box is gone, and the
+    /// page is not another login or a forgot-password flow.
     ///
     /// A new document is judged at once. Fields that a page removed by
     /// itself are given a moment first: a sign-in built into the page closes
@@ -528,6 +530,10 @@ final class Tab: ObservableObject, Identifiable {
             self.sent = nil
             return
         }
+        guard sameSite(as: sent.host) else {
+            self.sent = nil
+            return
+        }
         guard navigated else {
             let stamp = sent.at
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
@@ -537,29 +543,50 @@ final class Tab: ObservableObject, Identifiable {
             }
             return
         }
-        web.evaluateJavaScript("!!(window.__officeForms && window.__officeForms.hasPassword())") { [weak self] still, _ in
+        web.evaluateJavaScript(
+            "(function(){var f=window.__officeForms;if(!f)return{password:true,auth:true};return{password:!!f.hasPassword(),auth:!!f.isAuthFlow()}})()",
+            in: nil,
+            in: FormRelay.world
+        ) { [weak self] result in
             MainActor.assumeIsolated {
                 guard let self, let sent = self.sent else { return }
-                // The box is still there: a refused sign-in, or the second
-                // step of one. Kept for a moment longer, in case the page is
-                // still on its way.
-                if (still as? Bool) == true { return }
+                let body = (try? result.get()) as? [String: Any]
+                let still = body?["password"] as? Bool ?? true
+                let auth = body?["auth"] as? Bool ?? true
+                // The box is still there, or this is still a sign-in /
+                // forgot-password page: not a sign-in that took.
+                if still || auth { return }
                 self.sent = nil
                 self.onCredentials?(self, sent.host, sent.user, sent.password)
             }
         }
     }
 
+    /// Same site as the one the password was typed on — not wherever a
+    /// redirect landed.
+    private func sameSite(as host: String) -> Bool {
+        guard let current = address?.host()?.lowercased() else { return false }
+        let bare = current.hasPrefix("www.") ? String(current.dropFirst(4)) : current
+        return bare == host || Vault.registrable(bare) == Vault.registrable(host)
+    }
+
     /// Puts a remembered name and password where a person would have typed
-    /// them. Nothing is echoed back and nothing is written down here.
-    /// `done`, when given, hears back `false` for the one case worth saying
-    /// something about: the sign-in fields that were there a moment ago,
-    /// when this was offered, are gone by the time it actually runs.
+    /// them. Values go only into the isolated world; the page never sees
+    /// the call. `done`, when given, hears back `false` for the one case
+    /// worth saying something about: the sign-in fields that were there a
+    /// moment ago, when this was offered, are gone by the time it actually
+    /// runs.
     func fill(user: String, password: String, done: ((Bool) -> Void)? = nil) {
-        web.evaluateJavaScript(
-            "window.__officeForms && window.__officeForms.fill(`\(escape(user))`, `\(escape(password))`)"
-        ) { result, _ in
-            done?((result as? Bool) ?? false)
+        web.callAsyncJavaScript(
+            "return !!(window.__officeForms && window.__officeForms.fill(user, password))",
+            arguments: ["user": user, "password": password],
+            in: nil,
+            in: FormRelay.world
+        ) { result in
+            switch result {
+            case .success(let value): done?((value as? Bool) ?? false)
+            case .failure: done?(false)
+            }
         }
     }
 
@@ -675,9 +702,16 @@ final class Tab: ObservableObject, Identifiable {
     func unsaved(_ done: @escaping (Bool) -> Void) {
         guard let built else { return done(false) }
         built.evaluateJavaScript(
-            "!!(window.__officeForms && window.__officeForms.unsaved && window.__officeForms.unsaved())"
-        ) { value, _ in
-            MainActor.assumeIsolated { done((value as? Bool) == true) }
+            "!!(window.__officeForms && window.__officeForms.unsaved && window.__officeForms.unsaved())",
+            in: nil,
+            in: FormRelay.world
+        ) { result in
+            MainActor.assumeIsolated {
+                switch result {
+                case .success(let value): done((value as? Bool) == true)
+                case .failure: done(false)
+                }
+            }
         }
     }
 
@@ -916,6 +950,7 @@ final class Tab: ObservableObject, Identifiable {
         controller.removeScriptMessageHandler(forName: ScrollRelay.name)
         controller.removeScriptMessageHandler(forName: VeilRelay.name)
         controller.removeScriptMessageHandler(forName: FormRelay.name)
+        controller.removeScriptMessageHandler(forName: FormRelay.name, contentWorld: FormRelay.world)
         controller.removeScriptMessageHandler(forName: ImageRelay.name)
         controller.removeScriptMessageHandler(forName: StoreRelay.name)
         controller.removeScriptMessageHandler(forName: PasskeyRelay.name)

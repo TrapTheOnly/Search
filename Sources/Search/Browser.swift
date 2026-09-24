@@ -350,9 +350,12 @@ final class Browser: NSObject, ObservableObject {
     }
 
     func copy(_ login: Login) {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(login.password, forType: .string)
-        announce("Password copied")
+        Vault.prove("copy the password for \(login.host)") { [weak self] ok in
+            guard ok else { return }
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(login.password, forType: .string)
+            self?.announce("Password copied")
+        }
     }
 
     /// What came back from another browser's store, put in the keychain.
@@ -558,8 +561,8 @@ final class Browser: NSObject, ObservableObject {
 
     // MARK: - the address, in the tab itself
 
-    /// Clicking the tab you are already on turns it into the address, short
-    /// form, ready to be changed.
+    /// Clicking the tab you are already on turns it into the address — the
+    /// real one, so Return does not invent a scheme or drop the port.
     @Published private(set) var editingTab: Tab.ID?
     @Published var tabDraft = ""
     /// Set while that field is being used to name the tab rather than to go
@@ -572,7 +575,7 @@ final class Browser: NSObject, ObservableObject {
             return
         }
         renamingTab = false
-        tabDraft = Address.pretty(url)
+        tabDraft = Address.exact(url)
         editingTab = tab.id
     }
 
@@ -591,6 +594,11 @@ final class Browser: NSObject, ObservableObject {
             tab.name = typed.isEmpty ? nil : typed
             cancelTabEdit()
             writeSession(now: true)
+            return
+        }
+        let draft = tabDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        if tab.address.map({ Address.exact($0) == draft }) == true {
+            cancelTabEdit()
             return
         }
         guard let url = destination(for: tabDraft) else {
@@ -619,7 +627,7 @@ final class Browser: NSObject, ObservableObject {
             return
         }
         let draft = tabDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-        if draft.isEmpty || tab.address.map({ Address.pretty($0) == draft }) == true
+        if draft.isEmpty || tab.address.map({ Address.exact($0) == draft }) == true
             || destination(for: draft) == nil {
             cancelTabEdit()
             return
@@ -805,19 +813,24 @@ final class Browser: NSObject, ObservableObject {
             }
             return
         }
-        for entry in saved.tabs {
+        var restoredActive: Tab.ID?
+        for (index, entry) in saved.tabs.enumerated() {
             guard let url = URL(string: entry.url) else { continue }
             let tab = Tab()
             prepare(tab)
             tab.restore(url: url, title: entry.title, name: entry.name)
             tab.pin = entry.pin
+            if index == saved.active { restoredActive = tab.id }
             tabs.append(tab)
         }
         guard !tabs.isEmpty else {
             adopt(Tab())
             return
         }
-        let here = min(max(0, saved.active), tabs.count - 1)
+        // `active` indexes the persisted list, not the live row — private,
+        // bench, and non-http tabs were never written.
+        let here = restoredActive.flatMap { id in tabs.firstIndex { $0.id == id } }
+            ?? min(max(0, saved.active), tabs.count - 1)
         activeID = tabs[here].id
         // Only the one you were looking at actually loads.
         tabs[here].wake()
@@ -927,23 +940,25 @@ final class Browser: NSObject, ObservableObject {
     }
 
     func writeSession(now: Bool = false) {
+        // A sleeping tab holds its address in `pending`; asking for
+        // it there too means a pin can never be written out of
+        // existence by whatever its web view happens to be showing.
         Session.write(
             now: now,
             space: spaceID,
-            .init(
-                tabs: tabs.compactMap { tab in
-                    guard !tab.shy, !tab.bench else { return nil }
-                    // A sleeping tab holds its address in `pending`; asking for
-                    // it there too means a pin can never be written out of
-                    // existence by whatever its web view happens to be showing.
-                    guard let url = tab.pending ?? tab.address,
-                          url.scheme?.hasPrefix("http") == true
-                    else { return nil }
-                    return Session.Entry(
-                        url: url.absoluteString, title: tab.title, pin: tab.pin, name: tab.name
+            Session.compact(
+                tabs.map {
+                    Session.Live(
+                        id: $0.id,
+                        shy: $0.shy,
+                        bench: $0.bench,
+                        url: $0.pending ?? $0.address,
+                        title: $0.title,
+                        pin: $0.pin,
+                        name: $0.name
                     )
                 },
-                active: tabs.firstIndex { $0.id == activeID } ?? 0
+                active: activeID
             )
         )
     }
@@ -1345,16 +1360,17 @@ final class Browser: NSObject, ObservableObject {
     func loadRow(_ space: UUID) -> Parked {
         let saved = Session.read(space: space)
         var row: [Tab] = []
-        for entry in saved.tabs {
+        var active: Tab.ID?
+        for (index, entry) in saved.tabs.enumerated() {
             guard let url = URL(string: entry.url) else { continue }
             let tab = Tab(configuration: Web.configuration(space: space))
             prepare(tab)
             tab.restore(url: url, title: entry.title, name: entry.name)
             tab.pin = entry.pin
+            if index == saved.active { active = tab.id }
             row.append(tab)
         }
-        let active = row.indices.contains(saved.active) ? row[saved.active].id : row.first?.id
-        return Parked(tabs: row, active: active)
+        return Parked(tabs: row, active: active ?? row.first?.id)
     }
 
     /// Another space's row put on screen in place of this one (see

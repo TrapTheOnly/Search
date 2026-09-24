@@ -99,8 +99,7 @@ final class Passkeys: NSObject {
         let kind = body["kind"] as? String ?? ""
         let scheme = caller.origin.protocol.lowercased()
         let host = caller.origin.host.lowercased()
-        let local = host == "localhost" || host.hasSuffix(".localhost") || host == "127.0.0.1" || host == "::1"
-        guard !host.isEmpty, scheme == "https" || (scheme == "http" && local) else {
+        guard !host.isEmpty, scheme == "https" || (scheme == "http" && Address.isLocal(host)) else {
             return refuse(answer, "NotAllowedError", "Passkeys need a secure page.")
         }
         // The page in front of you only: a tab behind, a window behind, or
@@ -319,7 +318,7 @@ final class Passkeys: NSObject {
     /// The relying party is the page's own host, or a domain above it that is
     /// still a site of its own: never another site, never an address, and
     /// never a suffix anyone can register under — com, co.uk, github.io.
-    static func fits(_ rp: String, _ host: String) -> Bool {
+    nonisolated static func fits(_ rp: String, _ host: String) -> Bool {
         if rp == host { return true }
         let address = host.contains(":") || host.allSatisfy { $0.isNumber || $0 == "." }
         guard !address, host.hasSuffix("." + rp), rp.contains("."), let suffix = publicSuffix else { return false }
@@ -329,7 +328,7 @@ final class Passkeys: NSObject {
     /// WebKit's own test for a public suffix, from the list macOS keeps.
     /// Private to CFNetwork: without it, a page's own host is the only
     /// relying party it gets.
-    private static let publicSuffix: (@convention(c) (CFString) -> Bool)? = {
+    nonisolated private static let publicSuffix: (@convention(c) (CFString) -> Bool)? = {
         guard let symbol = dlsym(dlopen("/System/Library/Frameworks/CFNetwork.framework/CFNetwork", RTLD_NOW), "_CFHostIsDomainTopLevel")
         else { return nil }
         return unsafeBitCast(symbol, to: (@convention(c) (CFString) -> Bool).self)

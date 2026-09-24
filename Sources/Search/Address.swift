@@ -32,14 +32,64 @@ enum Address {
         guard looksLikeHost(host) else { return nil }
 
         // A local server almost never has a certificate, so https there is a
-        // connection failure rather than a page.
-        let local = host == "localhost"
-            || host.hasSuffix(".localhost")
-            || host == "127.0.0.1"
-            || host == "0.0.0.0"
-            || host.hasPrefix("192.168.")
-            || host.hasPrefix("10.")
-        return URL(string: (local ? "http://" : "https://") + text)
+        // connection failure rather than a page. Only a real local name or an
+        // address that is actually an address — not a hostname that merely
+        // starts with the same digits.
+        return URL(string: (isLocal(host) ? "http://" : "https://") + text)
+    }
+
+    /// Local HTTP, a self-signed certificate, a passkey on http: only for a
+    /// name or a literal that is actually on this machine or this network.
+    /// A hostname is never treated as an IP just because it starts with
+    /// the same characters as one.
+    static func isLocal(_ host: String) -> Bool {
+        let host = host.lowercased()
+        if host == "localhost" || host.hasSuffix(".localhost") || host.hasSuffix(".local") {
+            return true
+        }
+        if let ip = ipv4(host) { return isLocalIPv4(ip) }
+        return isLocalIPv6(host)
+    }
+
+    /// Four numbers, each 0–255. "10.office.dev" is not an address.
+    private static func ipv4(_ host: String) -> [UInt8]? {
+        let parts = host.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count == 4 else { return nil }
+        var octets: [UInt8] = []
+        for part in parts {
+            guard let n = UInt8(part) else { return nil }
+            octets.append(n)
+        }
+        return octets
+    }
+
+    /// Loopback, RFC1918, link-local, and the unspecified address people
+    /// type for a server bound to every interface.
+    private static func isLocalIPv4(_ ip: [UInt8]) -> Bool {
+        if ip[0] == 127 { return true }
+        if ip == [0, 0, 0, 0] { return true }
+        if ip[0] == 10 { return true }
+        if ip[0] == 192 && ip[1] == 168 { return true }
+        if ip[0] == 172 && (16...31).contains(ip[1]) { return true }
+        if ip[0] == 169 && ip[1] == 254 { return true }
+        return false
+    }
+
+    /// A literal, not a name: it has to contain a colon. ::1, link-local
+    /// fe80::/10, and unique-local fc00::/7.
+    private static func isLocalIPv6(_ host: String) -> Bool {
+        var text = host
+        if text.hasPrefix("["), text.hasSuffix("]") {
+            text = String(text.dropFirst().dropLast())
+        }
+        guard text.contains(":") else { return false }
+        if text == "::1" || text == "0:0:0:0:0:0:0:1" || text == "::" { return true }
+        if text.hasPrefix("fe8") || text.hasPrefix("fe9")
+            || text.hasPrefix("fea") || text.hasPrefix("feb") {
+            return true
+        }
+        if text.hasPrefix("fc") || text.hasPrefix("fd") { return true }
+        return false
     }
 
     private static func looksLikeHost(_ host: String) -> Bool {
@@ -71,5 +121,12 @@ enum Address {
         let bare = host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
         let path = url.path()
         return path.isEmpty || path == "/" ? bare : bare + path
+    }
+
+    /// The address as you would type it back: scheme, host, port, path,
+    /// query, fragment. What Return has to see, or it invents https and
+    /// drops the rest.
+    static func exact(_ url: URL) -> String {
+        url.absoluteString
     }
 }
