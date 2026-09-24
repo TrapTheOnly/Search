@@ -21,11 +21,12 @@ struct Keep: Codable, Identifiable, Equatable {
 
 /// A download still under way. WebKit's `WKDownload` holds the bytes; this
 /// holds the name and how far along, so the panel can draw without asking
-/// the download for UI state on every frame.
+/// the download for UI state on every frame. `download` is nil only for a
+/// demo row used by the probe (screenshots) — never in ordinary use.
 @MainActor
 final class Fetch: ObservableObject, Identifiable {
     let id = UUID()
-    let download: WKDownload
+    let download: WKDownload?
     @Published private(set) var name: String
     @Published private(set) var fraction: Double = 0
     @Published private(set) var received: Int64 = 0
@@ -56,22 +57,32 @@ final class Fetch: ObservableObject, Identifiable {
             .store(in: &bag)
     }
 
+    /// A stand-in for probe screenshots — progress without a WebKit download.
+    init(demo name: String, fraction: Double, received: Int64, expected: Int64) {
+        self.download = nil
+        self.name = name
+        self.fraction = fraction
+        self.received = received
+        self.expected = expected
+    }
+
     func titled(_ name: String) {
         guard !name.isEmpty else { return }
         self.name = name
     }
 
-    func cancel() { download.cancel() }
+    func cancel() { download?.cancel() }
 
-    /// "12 MB of 48 MB", or a percent when the size isn't known yet.
+    /// "12 MB of 48 MB · 42%", or a percent when the size isn't known yet.
     var progressSaid: String {
+        let percent = Int((min(max(fraction, 0), 1) * 100).rounded())
         if expected > 0 {
-            return "\(Fetch.bytes.string(fromByteCount: received)) of \(Fetch.bytes.string(fromByteCount: expected))"
+            let sizes = "\(Fetch.bytes.string(fromByteCount: received)) of \(Fetch.bytes.string(fromByteCount: expected))"
+            return percent > 0 ? "\(sizes) · \(percent)%" : sizes
         }
         if received > 0 {
             return Fetch.bytes.string(fromByteCount: received)
         }
-        let percent = Int((fraction * 100).rounded())
         return percent > 0 ? "\(percent)%" : "Starting…"
     }
 

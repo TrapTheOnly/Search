@@ -485,8 +485,16 @@ final class Browser: NSObject, ObservableObject {
     // MARK: - what is kept, and getting rid of it
 
     @Published var recalling = false
-    @Published var hoarding = false
+    @Published var hoarding = false {
+        didSet {
+            // Opening Downloads acknowledges a finished batch: the chrome
+            // door can go once nothing is still arriving.
+            if hoarding { acknowledgeDownloadsChrome() }
+        }
+    }
     @Published var recallHunt = ""
+    /// Small door beside Bookmarks while a download runs (and briefly after).
+    @Published private(set) var downloadsChrome = false
 
     /// Cookies, caches, local storage — everything a site left on this Mac,
     /// in every space. Clearing it signs you out of everything, which is
@@ -758,6 +766,11 @@ final class Browser: NSObject, ObservableObject {
     var pressure: DispatchSourceMemoryPressure?
     /// Downloads still under way. See `keep(_:)` and `Fetch` in Loot.swift.
     @Published var fetching: [Fetch] = []
+    /// Forwards each Fetch's progress so the chrome door's ring updates.
+    private var fetchBag = Set<AnyCancellable>()
+    /// Hides the downloads door a few seconds after the last file lands,
+    /// unless the panel is opened first.
+    private var downloadsChromeHush: DispatchWorkItem?
     /// The Chrome Web Store's pages, told when installs come and go. See StoreRelay.swift.
     var storeWatch: AnyCancellable?
     private var hush: DispatchWorkItem?
@@ -2096,14 +2109,75 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
     /// counted, so a tab still sending one to disk is never put to sleep.
     func keep(_ download: WKDownload) {
         download.delegate = self
-        fetching.append(Fetch(download))
+        track(Fetch(download))
+    }
+
+    /// A demo row for probe screenshots — only when the test world is driving.
+    func keepDemo(name: String, fraction: Double, received: Int64, expected: Int64) {
+        guard Store.testing else { return }
+        track(Fetch(demo: name, fraction: fraction, received: received, expected: expected))
     }
 
     /// Stop one that is still arriving. WebKit ends it; the panel drops the row.
     func cancel(_ fetch: Fetch) {
-        fetching.removeAll { $0.id == fetch.id }
+        dropFetches { $0.id == fetch.id }
         fetch.cancel()
         announce("Download cancelled")
+    }
+
+    /// Average how far the open downloads are, for the chrome door's ring.
+    var downloadFraction: Double {
+        guard !fetching.isEmpty else { return 1 }
+        return fetching.map(\.fraction).reduce(0, +) / Double(fetching.count)
+    }
+
+    private func track(_ fetch: Fetch) {
+        fetch.objectWillChange
+            .sink { [weak self] in self?.objectWillChange.send() }
+            .store(in: &fetchBag)
+        fetching.append(fetch)
+        revealDownloadsChrome()
+    }
+
+    private func dropFetches(where matches: (Fetch) -> Bool) {
+        fetching.removeAll(where: matches)
+        rewireFetchBag()
+        scheduleDownloadsChromeDismissIfIdle()
+    }
+
+    private func rewireFetchBag() {
+        fetchBag = []
+        for fetch in fetching {
+            fetch.objectWillChange
+                .sink { [weak self] in self?.objectWillChange.send() }
+                .store(in: &fetchBag)
+        }
+    }
+
+    private func revealDownloadsChrome() {
+        downloadsChromeHush?.cancel()
+        downloadsChromeHush = nil
+        guard !downloadsChrome else { return }
+        withAnimation(Motion.settle) { downloadsChrome = true }
+    }
+
+    /// Panel opened, or the short grace after the last file finished.
+    private func acknowledgeDownloadsChrome() {
+        downloadsChromeHush?.cancel()
+        downloadsChromeHush = nil
+        guard fetching.isEmpty, downloadsChrome else { return }
+        withAnimation(Motion.settle) { downloadsChrome = false }
+    }
+
+    private func scheduleDownloadsChromeDismissIfIdle() {
+        guard fetching.isEmpty else { return }
+        downloadsChromeHush?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.fetching.isEmpty else { return }
+            withAnimation(Motion.settle) { self.downloadsChrome = false }
+        }
+        downloadsChromeHush = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4, execute: work)
     }
 
     /// Without this WebKit refuses every request out of hand, and a page that
@@ -2281,7 +2355,7 @@ extension Browser: WKDownloadDelegate {
             panel.canCreateDirectories = true
             guard panel.runModal() == .OK, let url = panel.url else {
                 completionHandler(nil)
-                fetching.removeAll { $0.download === download }
+                dropFetches { $0.download === download }
                 return
             }
             fetching.first { $0.download === download }?.titled(url.lastPathComponent)
@@ -2295,7 +2369,7 @@ extension Browser: WKDownloadDelegate {
     }
 
     func downloadDidFinish(_ download: WKDownload) {
-        fetching.removeAll { $0.download === download }
+        dropFetches { $0.download === download }
         guard let file = download.progress.fileURL else {
             announce("Download finished")
             return
@@ -2317,7 +2391,7 @@ extension Browser: WKDownloadDelegate {
         resumeData: Data?
     ) {
         let wasTracked = fetching.contains { $0.download === download }
-        fetching.removeAll { $0.download === download }
+        dropFetches { $0.download === download }
         // Cancel from the panel already said so; only announce a real failure.
         if wasTracked { announce("Download failed") }
     }

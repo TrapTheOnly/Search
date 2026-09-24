@@ -145,6 +145,9 @@ struct TabBar: View {
                             .popover(isPresented: $browser.bookmarksOpen, arrowEdge: .bottom) {
                                 BookmarksDropdown(browser: browser, bookmarks: browser.bookmarks)
                             }
+                        if browser.downloadsChrome {
+                            DownloadsDoor(browser: browser)
+                        }
                     }
                     .background {
                         GeometryReader { box in
@@ -186,6 +189,7 @@ struct TabBar: View {
         .animation(Motion.glide, value: browser.editingTab)
         .animation(Motion.settle, value: browser.tabs.map(\.id))
         .animation(Motion.settle, value: browser.essentials.map(\.id))
+        .animation(Motion.settle, value: browser.downloadsChrome)
     }
 
     // MARK: - the spaces, one above the other
