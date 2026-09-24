@@ -756,8 +756,8 @@ final class Browser: NSObject, ObservableObject {
     /// macOS saying memory is short. See Sleep.swift.
     var dozing: Timer?
     var pressure: DispatchSourceMemoryPressure?
-    /// Downloads still under way. See `keep(_:)`.
-    var downloading: [WKDownload] = []
+    /// Downloads still under way. See `keep(_:)` and `Fetch` in Loot.swift.
+    @Published var fetching: [Fetch] = []
     /// The Chrome Web Store's pages, told when installs come and go. See StoreRelay.swift.
     var storeWatch: AnyCancellable?
     private var hush: DispatchWorkItem?
@@ -2083,7 +2083,14 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
     /// counted, so a tab still sending one to disk is never put to sleep.
     func keep(_ download: WKDownload) {
         download.delegate = self
-        downloading.append(download)
+        fetching.append(Fetch(download))
+    }
+
+    /// Stop one that is still arriving. WebKit ends it; the panel drops the row.
+    func cancel(_ fetch: Fetch) {
+        fetching.removeAll { $0.id == fetch.id }
+        fetch.cancel()
+        announce("Download cancelled")
     }
 
     /// Without this WebKit refuses every request out of hand, and a page that
@@ -2241,6 +2248,7 @@ extension Browser: WKDownloadDelegate {
     ) {
         let asked = response.url.flatMap { namedDownloads.removeValue(forKey: $0) }
         let name = asked ?? (suggestedFilename.isEmpty ? "download" : suggestedFilename)
+        fetching.first { $0.download === download }?.titled(name)
 
         guard !prefs.asksWhereToSave else {
             let panel = NSSavePanel()
@@ -2249,8 +2257,10 @@ extension Browser: WKDownloadDelegate {
             panel.canCreateDirectories = true
             guard panel.runModal() == .OK, let url = panel.url else {
                 completionHandler(nil)
+                fetching.removeAll { $0.download === download }
                 return
             }
+            fetching.first { $0.download === download }?.titled(url.lastPathComponent)
             completionHandler(url)
             announce("Downloading \(url.lastPathComponent)")
             return
@@ -2261,7 +2271,7 @@ extension Browser: WKDownloadDelegate {
     }
 
     func downloadDidFinish(_ download: WKDownload) {
-        downloading.removeAll { $0 === download }
+        fetching.removeAll { $0.download === download }
         guard let file = download.progress.fileURL else {
             announce("Download finished")
             return
@@ -2282,8 +2292,10 @@ extension Browser: WKDownloadDelegate {
         didFailWithError error: Error,
         resumeData: Data?
     ) {
-        downloading.removeAll { $0 === download }
-        announce("Download failed")
+        let wasTracked = fetching.contains { $0.download === download }
+        fetching.removeAll { $0.download === download }
+        // Cancel from the panel already said so; only announce a real failure.
+        if wasTracked { announce("Download failed") }
     }
 
     /// WebKit refuses to write over a file that is already there, so the name
