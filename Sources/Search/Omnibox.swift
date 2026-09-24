@@ -10,13 +10,10 @@ struct Omnibox: View {
     /// Raised over a page by ⌘L, rather than standing on an empty tab.
     let over: Bool
 
-    /// The field's own height — the 22 of text and 14 of air above and below —
-    /// so the list can sit below it without being stacked with it. The AppKit
-    /// well fills this same height for hits; the cell keeps the text centred.
+    /// The field's own height — the 22 of text and 14 of air above and below it
+    /// that `field` lays out — so the list can sit below it without being
+    /// stacked with it.
     private static let fieldHeight: CGFloat = 22 + 14 * 2
-    /// Air left and right of the letters, inside the pill — kept in the well
-    /// so the rounded ends stay part of the hit target.
-    fileprivate static let textInset: CGFloat = 22
 
     @State private var shake: CGFloat = 0
     @State private var refused = false
@@ -62,16 +59,21 @@ struct Omnibox: View {
     }
 
     private var field: some View {
+        // Chrome and text geometry match pre–PR #9: a natural-height
+        // NSTextField with SwiftUI padding. Hits used to miss the air around
+        // the letters; a clear pad covers the whole pill without resizing the
+        // field or redrawing its cell (24 Sep 2026).
         AddressField(browser: browser)
-            .frame(width: Metrics.fieldWidth, height: Self.fieldHeight)
+            .frame(height: 22)
+            .padding(.horizontal, 22)
+            .padding(.vertical, 14)
             .background {
                 ZStack {
                     // A slow, almost invisible breath under the field. It is
                     // the only thing on an empty tab, and a thing that never
                     // moves at all reads as a picture of an app rather than
-                    // an app. Hits pass through: the hosting view of an
-                    // NSViewRepresentable can sit above the field in AppKit
-                    // order even when its own hitTest is nil.
+                    // an app. Hits pass through so the pad and the field keep
+                    // the click.
                     Breath()
                         .allowsHitTesting(false)
 
@@ -87,6 +89,7 @@ struct Omnibox: View {
                     )
                     .allowsHitTesting(false)
             )
+            .overlay { PillHitPad(focus: browser.askFocus) }
             .shadow(color: .black.opacity(0.06), radius: 24, y: 8)
             .modifier(Shake(travel: shake))
             .onChange(of: browser.refusals) { _, _ in
@@ -250,50 +253,85 @@ private struct Breath: NSViewRepresentable {
     }
 }
 
+/// Invisible full-pill hit target. The AppKit text field stays at its natural
+/// ~22 pt height inside the padded chrome; without this, clicks and the I-beam
+/// only land on that thin band and the rest of the visible pill hits the
+/// window behind (24 Sep 2026). Drawing and cell geometry are untouched —
+/// the pad never becomes a layer and never fills a background. Clicks on the
+/// letter band are handed to the real NSTextField; clicks on the air around
+/// them focus it.
+private struct PillHitPad: NSViewRepresentable {
+    var focus: () -> Void
+
+    func makeNSView(context: Context) -> Pad {
+        let pad = Pad()
+        pad.focus = focus
+        return pad
+    }
+
+    func updateNSView(_ pad: Pad, context: Context) {
+        pad.focus = focus
+    }
+
+    final class Pad: NSView {
+        var focus: (() -> Void)?
+
+        /// The letters live in the middle 22 pt with 22 pt of air left and
+        /// right — the same frame SwiftUI gave AddressField before the pad.
+        private var textBand: NSRect {
+            NSRect(x: 22, y: 14, width: max(0, bounds.width - 44), height: 22)
+        }
+
+        override func hitTest(_ point: NSPoint) -> NSView? {
+            guard !isHidden, bounds.contains(point) else { return nil }
+            if textBand.contains(point), let field = addressField() {
+                return field
+            }
+            return self
+        }
+
+        override func mouseDown(with event: NSEvent) {
+            if let field = addressField() {
+                window?.makeFirstResponder(field)
+            } else {
+                focus?()
+            }
+        }
+
+        override func resetCursorRects() {
+            addCursorRect(bounds, cursor: .iBeam)
+        }
+
+        private func addressField() -> NSTextField? {
+            guard let root = window?.contentView else { return nil }
+            return findAddressField(in: root)
+        }
+
+        private func findAddressField(in view: NSView) -> NSTextField? {
+            if let field = view as? NSTextField, field.delegate is AddressField.Coordinator {
+                return field
+            }
+            for child in view.subviews {
+                if let found = findAddressField(in: child) { return found }
+            }
+            return nil
+        }
+    }
+}
+
 /// The field itself, in AppKit.
 ///
 /// SwiftUI's TextField can hold a string and nothing else, and the whole point
 /// here is the part you didn't type: the rest of the address, already there and
 /// selected, so carrying on typing replaces it and Return accepts it. That
 /// needs a real text field and its delegate.
-///
-/// The representable is a well that always fills the size SwiftUI proposes.
-/// A bare NSTextField kept its intrinsic ~19 pt text height inside the 50 pt
-/// pill, so most of the visible chrome hit the window's hosting view instead —
-/// I-beam and click-to-focus only on a thin band (24 Sep 2026). Stretching the
-/// field to the full pill fixed hits but drew the placeholder at the top of
-/// the tall control. The well still fills the pill for hits; a centred cell
-/// draws the letters in the middle, and the field editor follows.
 struct AddressField: NSViewRepresentable {
     @ObservedObject var browser: Browser
 
     func makeCoordinator() -> Coordinator { Coordinator(browser: browser) }
 
-    func makeNSView(context: Context) -> Well {
-        let well = Well()
-        let field = NSTextField(frame: .zero)
-        let cell = CenteredCell(textCell: "")
-        cell.isBordered = false
-        cell.isBezeled = false
-        cell.drawsBackground = false
-        cell.focusRingType = .none
-        cell.font = .systemFont(ofSize: 15.5)
-        cell.textColor = Palette.NS.ink
-        cell.usesSingleLineMode = true
-        cell.isEditable = true
-        cell.isSelectable = true
-        cell.wraps = false
-        cell.lineBreakMode = .byTruncatingTail
-        // SwiftUI picks its own colour for a placeholder, and on a pale ground
-        // that colour was near-white.
-        cell.placeholderAttributedString = NSAttributedString(
-            string: "Enter a web address",
-            attributes: [
-                .font: NSFont.systemFont(ofSize: 15.5),
-                .foregroundColor: NSColor(Palette.ink.opacity(0.3)),
-            ]
-        )
-        field.cell = cell
+    func makeNSView(context: Context) -> NSTextField {
+        let field = NSTextField()
         field.delegate = context.coordinator
         field.isBordered = false
         field.drawsBackground = false
@@ -301,15 +339,21 @@ struct AddressField: NSViewRepresentable {
         field.font = .systemFont(ofSize: 15.5)
         field.textColor = Palette.NS.ink
         field.lineBreakMode = .byTruncatingTail
-        field.translatesAutoresizingMaskIntoConstraints = true
-        field.autoresizingMask = []
-        well.field = field
-        well.addSubview(field)
-        return well
+        field.cell?.usesSingleLineMode = true
+        field.cell?.wraps = false
+        // SwiftUI picks its own colour for a placeholder, and on a pale ground
+        // that colour was near-white.
+        field.placeholderAttributedString = NSAttributedString(
+            string: "Enter a web address",
+            attributes: [
+                .font: NSFont.systemFont(ofSize: 15.5),
+                .foregroundColor: NSColor(Palette.ink.opacity(0.3)),
+            ]
+        )
+        return field
     }
 
-    func updateNSView(_ well: Well, context: Context) {
-        guard let field = well.field else { return }
+    func updateNSView(_ field: NSTextField, context: Context) {
         let coordinator = context.coordinator
         coordinator.browser = browser
 
@@ -342,88 +386,6 @@ struct AddressField: NSViewRepresentable {
                 ]
                 editor.selectAll(nil)
             }
-        }
-    }
-
-    /// Draws single-line text in the vertical middle of a tall control, and
-    /// puts the field editor in the same band so editing matches the look.
-    final class CenteredCell: NSTextFieldCell {
-        private func centered(_ rect: NSRect) -> NSRect {
-            var area = super.drawingRect(forBounds: rect)
-            let size = cellSize(forBounds: rect)
-            let slack = area.height - size.height
-            guard slack > 0 else { return area }
-            area.origin.y += (slack / 2).rounded(.toNearestOrAwayFromZero)
-            area.size.height = size.height
-            return area
-        }
-
-        override func drawingRect(forBounds rect: NSRect) -> NSRect { centered(rect) }
-
-        override func titleRect(forBounds rect: NSRect) -> NSRect { centered(rect) }
-
-        override func select(
-            withFrame rect: NSRect,
-            in controlView: NSView,
-            editor textObj: NSText,
-            delegate: Any?,
-            start selStart: Int,
-            length selLength: Int
-        ) {
-            super.select(
-                withFrame: centered(rect),
-                in: controlView,
-                editor: textObj,
-                delegate: delegate,
-                start: selStart,
-                length: selLength
-            )
-        }
-
-        override func edit(
-            withFrame rect: NSRect,
-            in controlView: NSView,
-            editor textObj: NSText,
-            delegate: Any?,
-            event: NSEvent?
-        ) {
-            super.edit(
-                withFrame: centered(rect),
-                in: controlView,
-                editor: textObj,
-                delegate: delegate,
-                event: event
-            )
-        }
-    }
-
-    /// Fills whatever size SwiftUI gives the representable. The text field
-    /// stretches to that for hits and the I-beam; its cell keeps the letters
-    /// centred so the pill looks as it did before the hit-target fix.
-    final class Well: NSView {
-        var field: NSTextField?
-
-        /// No opinion of its own: SwiftUI's `.frame(height:)` is the size.
-        override var intrinsicContentSize: NSSize {
-            NSSize(width: NSView.noIntrinsicMetric, height: NSView.noIntrinsicMetric)
-        }
-
-        override func layout() {
-            super.layout()
-            guard let field else { return }
-            let inset = Omnibox.textInset
-            let width = max(0, bounds.width - inset * 2)
-            // Full height — hits match the pill; CenteredCell does the vertical air.
-            field.frame = NSRect(x: inset, y: 0, width: width, height: bounds.height)
-        }
-
-        override func hitTest(_ point: NSPoint) -> NSView? {
-            guard !isHidden, frame.contains(point), let field else { return nil }
-            return field
-        }
-
-        override func resetCursorRects() {
-            addCursorRect(bounds, cursor: .iBeam)
         }
     }
 
