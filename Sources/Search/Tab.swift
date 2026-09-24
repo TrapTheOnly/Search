@@ -362,6 +362,9 @@ final class Tab: ObservableObject, Identifiable {
     /// A pin that stays visible in every space, above that space's own tabs.
     @Published var essential = false
 
+    /// One-level folder this tab sits in, when it sits in one.
+    @Published var folderID: UUID?
+
     /// A name you gave it, in place of whatever the page calls itself. It
     /// stays through navigation: a tab you named is a tab you are keeping for
     /// a job, not for a page.

@@ -166,6 +166,15 @@ final class Browser: NSObject, ObservableObject {
     /// Pins that stay in every space, then this space's own tabs.
     @Published var essentials: [Tab] = []
 
+    /// Named groups in this space's strip (folders are per-space).
+    @Published var folders: [TabFolder] = []
+
+    /// Option-click / menu glance: a short-lived page over this one.
+    @Published var glance: Glance?
+
+    /// The other pane when two tabs are split side by side.
+    @Published var splitID: Tab.ID?
+
     var fieldShowing: Bool { editing || active?.isBlank ?? true }
 
     /// Typed plus whatever the field is quietly finishing for you.
@@ -578,6 +587,7 @@ final class Browser: NSObject, ObservableObject {
     var pinnedCount: Int { essentials.count + tabs.filter { $0.pin != nil && !$0.essential }.count }
 
     func pin(_ tab: Tab) {
+        tab.folderID = nil
         if tab.pin == nil {
             tab.pin = tab.monogram
             // Pinned tabs live at the head of the row, in the order they were
@@ -914,6 +924,7 @@ final class Browser: NSObject, ObservableObject {
     func restoreSession() {
         let saved = Session.read(space: spaceID)
         adoptEssentials(from: saved)
+        folders = folders(from: saved)
         guard !saved.tabs.isEmpty else {
             // A blank tab costs nothing until it is asked for its page. Its
             // web view — and with it WebKit's helper processes — is built a
@@ -938,7 +949,7 @@ final class Browser: NSObject, ObservableObject {
             let tab = Tab()
             prepare(tab)
             tab.restore(url: url, title: entry.title, name: entry.name)
-            tab.pin = entry.pin
+            apply(entry, to: tab)
             tabs.append(tab)
         }
         tabs = Self.orderSpacePins(tabs)
@@ -1080,6 +1091,7 @@ final class Browser: NSObject, ObservableObject {
             .init(
                 tabs: tabs.compactMap { sessionEntry(for: $0) },
                 active: tabs.firstIndex { $0.id == activeID } ?? 0,
+                folders: folders.isEmpty ? nil : sessionFolders,
                 essentials: spaceID == Space.firstID ? (essentialRows.isEmpty ? nil : essentialRows) : nil
             )
         )
@@ -1090,7 +1102,7 @@ final class Browser: NSObject, ObservableObject {
         }
     }
 
-    private func rememberSession() {
+    func rememberSession() {
         guard !remembering else { return }
         remembering = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
@@ -1172,6 +1184,7 @@ final class Browser: NSObject, ObservableObject {
         cancelTabEdit()
         summoning = false
         suggesting = nil
+        if splitID == tab.id { splitID = activeID }
         guard tab.id != activeID else { return }
         // Coming back to the tab whose video is out brings it home first, so
         // it is never lifted and landed in the same breath.
@@ -1192,6 +1205,7 @@ final class Browser: NSObject, ObservableObject {
     /// ⌘W, or the cross on the tab. Closing the last one leaves a blank tab
     /// behind; closing that blank tab closes the window.
     func close(_ tab: Tab) {
+        if splitID == tab.id || (splitID != nil && tab.id == activeID) { splitID = nil }
         if tab.essential {
             if floating == tab.id { land() }
             tab.rest()
@@ -1551,12 +1565,12 @@ final class Browser: NSObject, ObservableObject {
             let tab = Tab(configuration: Web.configuration(space: space))
             prepare(tab)
             tab.restore(url: url, title: entry.title, name: entry.name)
-            tab.pin = entry.pin
+            apply(entry, to: tab)
             row.append(tab)
         }
         row = Self.orderSpacePins(row)
         let active = row.indices.contains(saved.active) ? row[saved.active].id : row.first?.id
-        return Parked(tabs: row, active: active)
+        return Parked(tabs: row, active: active, folders: folders(from: saved))
     }
 
     /// Another space's row put on screen in place of this one (see
@@ -2069,6 +2083,16 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
            let from = tab(for: webView), peekTab == nil {
             decisionHandler(.cancel)
             DispatchQueue.main.async { [weak self] in self?.peek(url, from: from) }
+            return
+        }
+        // Option-click: glance at the link over this page (see Glance.swift).
+        // Distinct from Peek (shift-click) and from ⌘-click (new tab).
+        if action.navigationType == .linkActivated,
+           ["http", "https"].contains(scheme),
+           action.modifierFlags.contains(.option),
+           !action.modifierFlags.contains(.command) {
+            decisionHandler(.cancel)
+            DispatchQueue.main.async { [weak self] in self?.glance(url) }
             return
         }
         if action.navigationType == .linkActivated,

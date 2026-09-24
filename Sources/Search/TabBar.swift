@@ -61,30 +61,9 @@ struct TabBar: View {
                                 ScrollViewReader { reader in
                                     ScrollView(.horizontal, showsIndicators: false) {
                                         HStack(spacing: Metrics.tabGap) {
-                                            ForEach(Array(browser.tabs.enumerated()), id: \.element.id) { index, tab in
-                                                // A pinned square moves among pinned squares, a title
-                                                // among titles: each has its own stride.
-                                                let step = (tab.pin != nil ? Metrics.pinWidth : width(in: geo.size.width)) + Metrics.tabGap
-                                                TabPill(
-                                                    browser: browser,
-                                                    prefs: browser.prefs,
-                                                    tab: tab,
-                                                    live: tab.id == browser.activeID,
-                                                    width: width(in: geo.size.width),
-                                                    room: geo.size.width - Metrics.lights - 12,
-                                                    pill: pill,
-                                                    close: { browser.close(tab) }
-                                                )
-                                                .modifier(Carried(index: index, count: browser.tabs.count, step: step, vertical: false, space: "strip") { target in
-                                                    guard browser.tabs.indices.contains(target) else { return }
-                                                    let dest = browser.tabs[target]
-                                                    if tab.pin != nil || dest.pin != nil {
-                                                        browser.movePin(tab, to: target + browser.essentials.count)
-                                                    } else {
-                                                        browser.move(tab, to: target)
-                                                    }
-                                                })
-                                                .id(tab.id)
+                                            ForEach(Array(browser.spaceShownPieces.enumerated()), id: \.element.id) { index, piece in
+                                                spaceItem(piece, index: index, width: width(in: geo.size.width), room: geo.size.width - Metrics.lights - 12, pill: pill)
+                                                    .id(piece.id)
                                             }
                                         }
                                         .frame(height: Metrics.strip)
@@ -190,6 +169,7 @@ struct TabBar: View {
         .animation(Motion.glide, value: browser.editingTab)
         .animation(Motion.settle, value: browser.tabs.map(\.id))
         .animation(Motion.settle, value: browser.essentials.map(\.id))
+        .animation(Motion.settle, value: browser.folders.map(\.collapsed))
         .animation(Motion.settle, value: browser.downloadsChrome)
     }
 
@@ -252,7 +232,7 @@ struct TabBar: View {
         } else {
             let space = browser.spaces[index]
             let row = space.id == browser.spaceID
-                ? Parked(tabs: browser.tabs, active: browser.activeID)
+                ? Parked(tabs: browser.tabs, active: browser.activeID, folders: browser.folders)
                 : browser.parked[space.id] ?? Parked(tabs: [], active: nil)
             let shown = row.tabs
             let each = width(in: strip, pinned: shown.filter { $0.pin != nil }.count, count: shown.count)
@@ -272,6 +252,42 @@ struct TabBar: View {
             }
             .frame(height: Metrics.strip)
             .allowsHitTesting(false)
+        }
+    }
+
+    /// One piece of this space's swipe row: pin, folder header, or loose tab.
+    @ViewBuilder
+    private func spaceItem(_ piece: StripPiece, index: Int, width: CGFloat, room: CGFloat, pill: Namespace.ID) -> some View {
+        switch piece {
+        case .essential:
+            EmptyView()
+        case .pin(let tab), .loose(let tab):
+            let step = (tab.pin != nil ? Metrics.pinWidth : width) + Metrics.tabGap
+            let tabIndex = browser.tabs.firstIndex(where: { $0.id == tab.id }) ?? index
+            TabPill(
+                browser: browser,
+                prefs: browser.prefs,
+                tab: tab,
+                live: tab.id == browser.activeID,
+                width: width,
+                room: room,
+                pill: pill,
+                close: { browser.close(tab) }
+            )
+            .modifier(Carried(index: tabIndex, count: browser.tabs.count, step: step, vertical: false, space: "strip") { target in
+                guard browser.tabs.indices.contains(target) else { return }
+                let dest = browser.tabs[target]
+                if tab.pin != nil || dest.pin != nil {
+                    browser.movePin(tab, to: target + browser.essentials.count)
+                } else if let folderID = dest.folderID,
+                          let folder = browser.folders.first(where: { $0.id == folderID }) {
+                    browser.place(tab, in: folder)
+                } else {
+                    browser.move(tab, to: target)
+                }
+            })
+        case .folder(let folder, let members):
+            FolderChip(browser: browser, folder: folder, members: members, width: min(140, max(72, width)))
         }
     }
 
@@ -322,13 +338,23 @@ struct TabBar: View {
     private func content(in strip: CGFloat) -> CGFloat {
         let each = width(in: strip)
         let pinned = CGFloat(browser.pinnedCount)
-        let loose = CGFloat(browser.tabs.count - browser.spacePins)
-        var total = pinned * Metrics.pinWidth + loose * each
-            + CGFloat(max(0, browser.strip.count - 1)) * Metrics.tabGap
+        let hidden = collapsedCount
+        let headers = CGFloat(browser.folders.count)
+        let loose = CGFloat(browser.tabs.count - browser.spacePins - hidden)
+        let count = Int(pinned + loose + headers)
+        var total = pinned * Metrics.pinWidth + headers * min(140, max(72, each)) + loose * each
+            + CGFloat(max(0, count - 1)) * Metrics.tabGap
         if let id = browser.editingTab, let tab = browser.strip.first(where: { $0.id == id }) {
             total += min(340, strip - Metrics.lights - 12) - (tab.pin != nil || tab.essential ? Metrics.pinWidth : each)
         }
         return total
+    }
+
+    private var collapsedCount: Int {
+        browser.tabs.filter { tab in
+            guard let id = tab.folderID, let folder = browser.folders.first(where: { $0.id == id }) else { return false }
+            return folder.collapsed
+        }.count
     }
 
     /// The strip, less the lights, the plus, the doors at the far end and
@@ -842,6 +868,26 @@ struct TabMenu: View {
         } else {
             Button("Make Essential (all spaces)") { browser.makeEssential(tab) }
                 .disabled(tab.isBlank)
+        }
+        Button("Glance") { browser.glance(tab) }
+            .disabled(tab.isBlank)
+        Button(browser.splitID == nil ? "Split to the Side" : "End Split") {
+            if browser.splitID == nil { browser.splitAside(tab) } else { browser.endSplit() }
+        }
+        .disabled(tab.isBlank && browser.splitID == nil)
+        if tab.pin == nil && !tab.essential {
+            Button("New Folder") { browser.newFolder(around: tab) }
+                .disabled(tab.isBlank)
+            if !browser.folders.isEmpty {
+                Menu("Add to Folder") {
+                    ForEach(browser.folders) { folder in
+                        Button(folder.name) { browser.place(tab, in: folder) }
+                    }
+                }
+            }
+            if tab.folderID != nil {
+                Button("Remove from Folder") { browser.removeFromFolder(tab) }
+            }
         }
         Divider()
         Button("Rename") { browser.beginTabRename(tab) }

@@ -130,6 +130,12 @@ struct SearchApp: App {
                         Button("Make Essential (All Spaces)") { browser.makeEssential(tab) }
                             .disabled(tab.isBlank)
                     }
+                    Button("Glance") { browser.glance(tab) }
+                        .disabled(tab.isBlank)
+                    Button(browser.splitID == nil ? "Split to the Side" : "End Split") {
+                        if browser.splitID == nil { browser.splitAside(tab) } else { browser.endSplit() }
+                    }
+                    .disabled(tab.isBlank && browser.splitID == nil)
                 }
                 Button("Rename Tab") { if let tab = browser.active { browser.beginTabRename(tab) } }
                     .disabled(browser.active == nil)
@@ -330,6 +336,7 @@ struct ContentView: View {
         }
         .ignoresSafeArea()
         .animation(Motion.glide, value: browser.prefs.sidebar)
+        .animation(Motion.glide, value: browser.splitID)
         .animation(.easeOut(duration: 0.12), value: browser.active?.immersed)
         .onAppear { if room == nil { room = chrome } }
         .onChange(of: chrome) { old, new in make(room: new, after: old) }
@@ -337,7 +344,25 @@ struct ContentView: View {
 
     @ViewBuilder
     private var stage: some View {
-        if let tab = browser.active {
+        if let tab = browser.active, let mate = browser.splitMate, mate.id != tab.id {
+            SplitStage(browser: browser, left: tab, right: mate)
+                .overlay {
+                    if browser.prefs.showsLinks { LinkBubble(status: browser.linkStatus) }
+                }
+                .overlay(alignment: .topTrailing) {
+                    if browser.finding {
+                        FindBar(browser: browser)
+                            .transition(.move(edge: .top).combined(with: .opacity))
+                    }
+                }
+                .overlay(alignment: .topLeading) {
+                    if let asked = browser.suggesting, asked.tab == tab.id || asked.tab == mate.id {
+                        AccountList(browser: browser, asked: asked)
+                            .transition(.opacity)
+                    }
+                }
+                .animation(Motion.quick, value: browser.suggesting)
+        } else if let tab = browser.active {
             Page(tab: tab)
                 .overlay {
                     if browser.prefs.showsLinks { LinkBubble(status: browser.linkStatus) }
@@ -496,12 +521,18 @@ struct ContentView: View {
                     // the title bar's band is page too.
                     .ignoresSafeArea()
             }
+            .overlay {
+                if let glance = browser.glance {
+                    GlanceCard(browser: browser, glance: glance)
+                }
+            }
             .overlay { field }
             .overlay { panels }
             // The field comes on its spring, and goes quickly: once Return
             // is pressed the page is on its way, and the field is not what
             // there is to watch.
             .animation(browser.fieldShowing ? Motion.settle : Motion.quick, value: browser.fieldShowing)
+            .animation(Motion.settle, value: browser.glance != nil)
             .background(WindowSetup { window = $0; dress($0) })
             .onChange(of: browser.prefs.sidebar) { _, _ in
                 DispatchQueue.main.async { measureLights() }
@@ -832,6 +863,14 @@ struct ContentView: View {
                 browser.closePeek()
                 return true
             }
+            if browser.glance != nil {
+                browser.closeGlance()
+                return true
+            }
+            if browser.splitID != nil {
+                browser.endSplit()
+                return true
+            }
             if browser.makingSpace {
                 withAnimation(Motion.glide) { browser.makingSpace = false }
                 return true
@@ -1021,6 +1060,10 @@ struct ContentView: View {
         case "w" where !shifted:
             if browser.peekTab != nil {
                 browser.closePeek()
+            } else if browser.glance != nil {
+                browser.closeGlance()
+            } else if browser.splitID != nil {
+                browser.endSplit()
             } else if let tab = browser.active {
                 browser.close(tab)
             }

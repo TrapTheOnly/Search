@@ -259,6 +259,60 @@ final class Bench {
             if on { browser.makeEssential(tab) } else { browser.removeEssential(tab) }
             answer(describe(tab))
 
+        case "glance":
+            guard Store.testing else { answer(["error": "glance only works on a --test run"]); return }
+            if request["close"] as? Bool == true {
+                browser.closeGlance()
+                answer(["glance": ""])
+                return
+            }
+            if let url = (request["url"] as? String).flatMap(Address.url(from:)) {
+                browser.glance(url)
+                answer(["glance": url.absoluteString])
+                return
+            }
+            guard let tab = find(request, in: browser) ?? browser.active else { answer(missing(request)); return }
+            browser.glance(tab)
+            answer(["glance": (tab.pending ?? tab.address)?.absoluteString ?? ""])
+
+        case "split":
+            guard Store.testing else { answer(["error": "split only works on a --test run"]); return }
+            if request["end"] as? Bool == true || request["close"] as? Bool == true {
+                browser.endSplit()
+                answer(["split": ""])
+                return
+            }
+            guard let tab = find(request, in: browser) ?? browser.active else { answer(missing(request)); return }
+            browser.splitAside(tab)
+            answer(["split": browser.splitID?.uuidString ?? "", "active": browser.activeID?.uuidString ?? ""])
+
+        case "folder":
+            guard Store.testing else { answer(["error": "folder only works on a --test run"]); return }
+            if let name = request["new"] as? String {
+                guard let tab = find(request, in: browser) ?? browser.active else { answer(missing(request)); return }
+                let folder = TabFolder(id: UUID(), name: name.isEmpty ? "Folder" : name, collapsed: false)
+                browser.folders.append(folder)
+                tab.folderID = folder.id
+                if tab.pin != nil { browser.unpin(tab) }
+                browser.writeSession(now: true)
+                answer(["folder": folder.id.uuidString, "name": folder.name])
+                return
+            }
+            if let id = request["id"] as? String, let uuid = UUID(uuidString: id),
+               let folder = browser.folders.first(where: { $0.id == uuid }) {
+                if request["toggle"] as? Bool == true {
+                    browser.toggleFolder(folder)
+                }
+                if let tab = find(request, in: browser) {
+                    browser.place(tab, in: folder)
+                }
+                answer(["folder": folder.id.uuidString, "collapsed": folder.collapsed, "members": browser.tabs.filter { $0.folderID == folder.id }.count])
+                return
+            }
+            answer([
+                "folders": browser.folders.map { ["id": $0.id.uuidString, "name": $0.name, "collapsed": $0.collapsed] as [String: Any] },
+            ])
+
         case "open":
             guard let url = (request["url"] as? String).flatMap(Address.url(from:)) else {
                 answer(["error": "open needs a url"])
@@ -1240,7 +1294,7 @@ final class Bench {
 
         default:
             answer(["error": "unknown command “\(verb)”", "commands": [
-                "tabs", "open", "go", "close", "wait", "sleep", "select", "text", "eval", "click", "type", "submit", "shot", "probe", "key", "resize", "hit", "film", "window", "pages", "picture", "place", "field", "bookmark", "menu", "keyeq", "pull", "space", "strip", "column", "site", "ui", "pin", "unpin", "essential",
+                "tabs", "open", "go", "close", "wait", "sleep", "select", "text", "eval", "click", "type", "submit", "shot", "probe", "key", "resize", "hit", "film", "window", "pages", "picture", "place", "field", "bookmark", "menu", "keyeq", "pull", "space", "strip", "column", "site", "ui", "pin", "unpin", "essential", "glance", "split", "folder",
             ]])
         }
     }
