@@ -16,8 +16,9 @@ enum Session {
     struct Shape: Codable {
         var tabs: [Entry]
         var active: Int
-        /// Pins that follow you into every space. Written on every space's
-        /// file so whichever one you open has the list; old files omit it.
+        /// Pins that follow you into every space of this profile. Canonical
+        /// home is the first space's `session.json`. Older builds also wrote
+        /// this onto every space file; signed-out spaces no longer claim it.
         var essentials: [Entry]?
     }
 
