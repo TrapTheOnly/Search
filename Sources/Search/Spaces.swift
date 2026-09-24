@@ -19,9 +19,11 @@ import WebKit
 struct Space: Codable, Identifiable, Equatable {
     var id: UUID
     var name: String
-    /// Which of `Spaces.colours` washes the chrome (tab strip / sidebar) on
-    /// top of Look. Icons name the space in the UI; colour only tints.
+    /// Which of `Spaces.colours` — kept for older lists and for named
+    /// swatches. Continuous tint lives in `tint` when set.
     var colour: Int
+    /// Continuous RGB wash over Look. Nil means the named `colour` preset.
+    var tint: SpaceTint?
     /// Its icon, one of `Spaces.icons`.
     var icon: String?
     /// Signed in wherever the first space is — the same cookies and
@@ -39,6 +41,11 @@ struct Space: Codable, Identifiable, Equatable {
     /// The icon it shows: its own, or a house for the first and a
     /// briefcase for any other that has none yet.
     var symbol: String { icon.flatMap { Spaces.icons.contains($0) ? $0 : nil } ?? (isFirst ? "house" : "briefcase") }
+
+    /// The RGB that actually washes the chrome.
+    var wash: SpaceTint {
+        tint ?? SpaceTint(rgb: Spaces.colourRGB[Spaces.colourIndex(colour)])
+    }
 }
 
 enum Spaces {
@@ -64,37 +71,58 @@ enum Spaces {
 
     /// A soft wash of a space colour over chrome. Opacity follows the window's
     /// appearance so the tint sits on Look rather than replacing light/dark.
-    static func chromeWash(_ raw: Int) -> Color {
-        Color(nsColor: chromeWashNS(raw))
+    static func chromeWash(_ tint: SpaceTint) -> Color {
+        Color(nsColor: chromeWashNS(tint))
     }
 
-    static func chromeWashNS(_ raw: Int) -> NSColor {
-        let i = colourIndex(raw)
-        let rgb = colourRGB[i]
+    static func chromeWash(_ raw: Int) -> Color {
+        chromeWash(SpaceTint(rgb: colourRGB[colourIndex(raw)]))
+    }
+
+    static func chromeWashNS(_ tint: SpaceTint) -> NSColor {
+        let vivid = tint.vivid
         return NSColor(name: nil) { appearance in
             let dim = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-            // Slate stays quieter; vivid colours a touch more present in dark.
-            let vivid = i != 0
+            // Quiet greys stay softer; vivid colours a touch more present in dark.
             let alpha: CGFloat = dim ? (vivid ? 0.20 : 0.09) : (vivid ? 0.12 : 0.055)
-            return NSColor(srgbRed: rgb.0, green: rgb.1, blue: rgb.2, alpha: alpha)
+            return NSColor(srgbRed: tint.red, green: tint.green, blue: tint.blue, alpha: alpha)
         }
     }
 
     /// Solid swatch for menus — the full colour, not the wash.
+    static func swatchNS(_ tint: SpaceTint) -> NSColor { tint.nsColor }
+
     static func swatchNS(_ raw: Int) -> NSColor {
-        let rgb = colourRGB[colourIndex(raw)]
-        return NSColor(srgbRed: rgb.0, green: rgb.1, blue: rgb.2, alpha: 1)
+        swatchNS(SpaceTint(rgb: colourRGB[colourIndex(raw)]))
     }
 
-    static func swatchImage(_ raw: Int) -> NSImage {
+    static func swatchImage(_ tint: SpaceTint) -> NSImage {
         let size = NSSize(width: 12, height: 12)
         let image = NSImage(size: size)
         image.lockFocus()
-        swatchNS(raw).setFill()
+        swatchNS(tint).setFill()
         NSBezierPath(roundedRect: NSRect(origin: .zero, size: size), xRadius: 3, yRadius: 3).fill()
         image.unlockFocus()
         image.isTemplate = false
         return image
+    }
+
+    static func swatchImage(_ raw: Int) -> NSImage {
+        swatchImage(SpaceTint(rgb: colourRGB[colourIndex(raw)]))
+    }
+
+    /// Closest named preset to a continuous tint — for checkmarks only.
+    static func nearestColour(_ tint: SpaceTint) -> Int {
+        var best = 0
+        var bestDist = Double.greatestFiniteMagnitude
+        for (i, rgb) in colourRGB.enumerated() {
+            let dr = tint.red - Double(rgb.0)
+            let dg = tint.green - Double(rgb.1)
+            let db = tint.blue - Double(rgb.2)
+            let d = dr * dr + dg * dg + db * db
+            if d < bestDist { bestDist = d; best = i }
+        }
+        return best
     }
 
     /// The icons a space can wear: Apple's own symbols, drawn in one weight
@@ -331,7 +359,19 @@ extension Browser {
     func setSpaceColour(_ id: UUID, to colour: Int) {
         guard let at = spaces.firstIndex(where: { $0.id == id }) else { return }
         spaces[at].colour = Spaces.colourIndex(colour)
+        spaces[at].tint = nil
         Spaces.write(spaces)
+    }
+
+    /// Continuous tint from the colour wheel. Clears the named-swatch match
+    /// so the wash follows the RGB; `colour` keeps the nearest preset for
+    /// older readers that ignore `tint`. Pass `persist: false` while dragging
+    /// the wheel so disk isn't hit every pixel.
+    func setSpaceTint(_ id: UUID, to tint: SpaceTint, persist: Bool = true) {
+        guard let at = spaces.firstIndex(where: { $0.id == id }) else { return }
+        spaces[at].tint = tint
+        spaces[at].colour = Spaces.nearestColour(tint)
+        if persist { Spaces.write(spaces) }
     }
 
     func setSpaceDownloads(_ id: UUID, to folder: URL?) {
@@ -398,7 +438,7 @@ struct SpaceDot: View {
     private var dotFill: Color {
         if hovering { return Palette.hover }
         guard browser.prefs.usesSpaces, !browser.makingSpace else { return .clear }
-        return Spaces.chromeWash(browser.space.colour)
+        return Spaces.chromeWash(browser.space.wash)
     }
 
     var body: some View {
@@ -425,7 +465,7 @@ struct SpaceDot: View {
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
         .help("\(browser.space.name) — ⌃1–⌃9, or two fingers \(browser.prefs.sidebar ? "sideways" : "up or down") over the tabs, to switch")
-        .animation(Motion.quick, value: browser.space.colour)
+        .animation(Motion.quick, value: browser.space.wash)
         .onChange(of: key) { _, now in
             let symbol = symbol
             DispatchQueue.main.async {
@@ -484,17 +524,9 @@ enum SpaceMenu {
         let icon = NSMenuItem(title: "Icon", action: nil, keyEquivalent: "")
         icon.submenu = icons
         menu.addItem(icon)
-        let tints = NSMenu()
-        for (index, name) in Spaces.colourNames.enumerated() {
-            let choice = item(name, checked: Spaces.colourIndex(here.colour) == index) {
-                browser.setSpaceColour(here.id, to: index)
-            }
-            choice.image = Spaces.swatchImage(index)
-            tints.addItem(choice)
-        }
-        let tint = NSMenuItem(title: "Colour", action: nil, keyEquivalent: "")
-        tint.submenu = tints
-        menu.addItem(tint)
+        let theme = item("Theme…") { ThemePickerPanel.show(for: browser) }
+        theme.image = Spaces.swatchImage(here.wash)
+        menu.addItem(theme)
         // The order is the swipe's, and ⌃1–⌃9's.
         if let at = browser.spaces.firstIndex(where: { $0.id == here.id }) {
             if at > 0 { menu.addItem(item("Move Left") { browser.moveSpace(here.id, to: at - 1) }) }

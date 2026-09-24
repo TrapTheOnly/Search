@@ -172,12 +172,12 @@ struct TabBar: View {
         }
         .background {
             ZStack {
-                ChromeFill(colour: browser.prefs.usesSpaces ? browser.space.colour : nil, clearWhenPlain: true)
+                ChromeFill(tint: browser.prefs.usesSpaces ? browser.space.wash : nil, clearWhenPlain: true)
                 if landing { Palette.hover }
             }
         }
         .animation(Motion.quick, value: landing)
-        .animation(Motion.quick, value: browser.space.colour)
+        .animation(Motion.quick, value: browser.space.wash)
         .animation(Motion.quick, value: browser.spaceID)
         .animation(Motion.glide, value: browser.activeID)
         // The row makes room for the field on the same spring as everything

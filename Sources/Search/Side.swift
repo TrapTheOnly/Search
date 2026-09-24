@@ -88,7 +88,7 @@ struct SideBar: View {
         .onAppear { SpaceSwipe.shared.start(for: browser) }
         .background {
             ZStack {
-                ChromeFill(colour: browser.prefs.usesSpaces ? browser.space.colour : nil)
+                ChromeFill(tint: browser.prefs.usesSpaces ? browser.space.wash : nil)
                 if landing { Palette.hover }
             }
         }
@@ -100,7 +100,7 @@ struct SideBar: View {
             browser.take(providers)
         }
         .animation(Motion.quick, value: landing)
-        .animation(Motion.quick, value: browser.space.colour)
+        .animation(Motion.quick, value: browser.space.wash)
         .animation(Motion.quick, value: browser.spaceID)
         .animation(Motion.glide, value: browser.activeID)
         .animation(Motion.glide, value: browser.editingTab)

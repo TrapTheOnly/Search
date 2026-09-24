@@ -62,20 +62,20 @@ enum Palette {
 struct ChromeFill: View {
     /// `nil` when spaces are off — plain ground (or clear, for the top strip
     /// which used to sit transparent over the window).
-    var colour: Int?
+    var tint: SpaceTint?
     /// Top strip historically drew nothing of its own; keep that when untinted.
     var clearWhenPlain: Bool = false
 
     var body: some View {
         ZStack {
-            if let colour {
+            if let tint {
                 Palette.ground
-                Spaces.chromeWash(colour)
+                Spaces.chromeWash(tint)
             } else if !clearWhenPlain {
                 Palette.ground
             }
         }
-        .animation(Motion.quick, value: colour)
+        .animation(Motion.quick, value: tint)
     }
 }
 
