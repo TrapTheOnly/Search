@@ -6,7 +6,8 @@ import SwiftUI
 //
 // Scope (Zen-aligned):
 // - Essentials are **profile-wide**, not space-owned. Switching spaces must
-//   not unload or rebuild them (see sticky strip/column in TabBar / Side).
+//   not unload or rebuild them (sticky strip in TabBar; sidebar pin layout
+//   owned separately — leave Side's pin grid alone).
 // - A space with `sharesSignIns == false` ("signed out") isolates cookies /
 //   sign-ins only. Essentials still show there — they are not migrated into
 //   that space's session. True isolation (hide Essentials too) is a Profile.
