@@ -914,7 +914,7 @@ struct ContentView: View {
             if number == 0 {
                 browser.resetZoom()
             } else {
-                browser.select(index: number == 9 ? browser.tabs.count - 1 : number - 1)
+                browser.select(index: number == 9 ? browser.strip.count - 1 : number - 1)
             }
             return true
         }

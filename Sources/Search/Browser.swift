@@ -9,6 +9,18 @@ import Combine
 @MainActor
 final class Browser: NSObject, ObservableObject {
     @Published private(set) var tabs: [Tab] = []
+
+    func detach(_ tab: Tab) {
+        if let here = tabs.firstIndex(where: { $0.id == tab.id }) {
+            tabs.remove(at: here)
+        }
+    }
+
+    func attach(_ tab: Tab, at index: Int = 0) {
+        guard !tabs.contains(where: { $0.id == tab.id }) else { return }
+        tabs.insert(tab, at: min(max(0, index), tabs.count))
+    }
+
     @Published var activeID: Tab.ID? {
         didSet {
             // The tab just left is the tab just looked at. Whether a tab has
@@ -16,7 +28,7 @@ final class Browser: NSObject, ObservableObject {
             // from when it was first picked.
             guard oldValue != activeID, let old = oldValue else { return }
             linkStatus.dismiss()
-            tabs.first { $0.id == old }?.touch()
+            strip.first { $0.id == old }?.touch()
         }
     }
 
@@ -123,7 +135,11 @@ final class Browser: NSObject, ObservableObject {
     /// True between the first ⌘K and letting go of ⌘.
     var cycling = false
 
-    var active: Tab? { tabs.first { $0.id == activeID } }
+    var active: Tab? { strip.first { $0.id == activeID } }
+
+    /// Pins that stay in every space, then this space's own tabs.
+    @Published var essentials: [Tab] = []
+
     var fieldShowing: Bool { editing || active?.isBlank ?? true }
 
     /// Typed plus whatever the field is quietly finishing for you.
@@ -500,7 +516,7 @@ final class Browser: NSObject, ObservableObject {
     /// and that letter arrives selected so the next keystroke replaces it.
     @Published var editingPin: Tab.ID?
 
-    var pinnedCount: Int { tabs.filter { $0.pin != nil }.count }
+    var pinnedCount: Int { essentials.count + tabs.filter { $0.pin != nil }.count }
 
     func pin(_ tab: Tab) {
         if tab.pin == nil {
@@ -508,7 +524,7 @@ final class Browser: NSObject, ObservableObject {
             // Pinned tabs live at the head of the row, in the order they were
             // pinned, so their letters never move under your hand.
             if let here = tabs.firstIndex(where: { $0.id == tab.id }) {
-                let home = max(0, pinnedCount - 1)
+                let home = max(0, spacePins - 1)
                 if here != home {
                     tabs.move(
                         fromOffsets: IndexSet(integer: here),
@@ -545,12 +561,15 @@ final class Browser: NSObject, ObservableObject {
     }
 
     func unpin(_ tab: Tab) {
+        if tab.essential {
+            removeEssential(tab)
+        }
         if editingPin == tab.id { editingPin = nil }
         tab.pin = nil
         defer { writeSession(now: true) }
         // Back out of the pinned block, to the head of the loose tabs.
         if let here = tabs.firstIndex(where: { $0.id == tab.id }) {
-            let home = pinnedCount
+            let home = spacePins
             if here != home {
                 tabs.move(fromOffsets: IndexSet(integer: here), toOffset: home > here ? home + 1 : home)
             }
@@ -587,7 +606,7 @@ final class Browser: NSObject, ObservableObject {
     }
 
     func commitTabEdit() {
-        guard let id = editingTab, let tab = tabs.first(where: { $0.id == id }) else { return }
+        guard let id = editingTab, let tab = strip.first(where: { $0.id == id }) else { return }
         if renamingTab {
             let typed = tabDraft.trimmingCharacters(in: .whitespacesAndNewlines)
             tab.name = typed.isEmpty ? nil : typed
@@ -615,7 +634,7 @@ final class Browser: NSObject, ObservableObject {
     /// was typed is kept, as Return keeps it. An address left as it was loads
     /// nothing again, and a field left empty is let go.
     func finishTabEdit() {
-        guard let id = editingTab, let tab = tabs.first(where: { $0.id == id }) else { return }
+        guard let id = editingTab, let tab = strip.first(where: { $0.id == id }) else { return }
         if renamingTab {
             commitTabEdit()
             return
@@ -810,6 +829,7 @@ final class Browser: NSObject, ObservableObject {
     /// The row of tabs the space on screen had last time, or one empty tab.
     func restoreSession() {
         let saved = Session.read(space: spaceID)
+        adoptEssentials(from: saved)
         guard !saved.tabs.isEmpty else {
             // A blank tab costs nothing until it is asked for its page. Its
             // web view — and with it WebKit's helper processes — is built a
@@ -857,7 +877,7 @@ final class Browser: NSObject, ObservableObject {
             .sink { [weak self] on in
                 guard let self else { return }
                 Shield.shared.enabled = on
-                Shield.shared.apply(to: tabs.compactMap { $0.built?.configuration.userContentController })
+                Shield.shared.apply(to: strip.compactMap { $0.built?.configuration.userContentController })
                 announce(on ? "Ads and trackers blocked" : "Blocking off — reload to see the difference")
             }
             .store(in: &bag)
@@ -893,7 +913,7 @@ final class Browser: NSObject, ObservableObject {
             .dropFirst()
             .sink { [weak self] on in
                 guard let self else { return }
-                for tab in tabs + parkedTabs {
+                for tab in strip + parkedTabs {
                     tab.arm(hiding: curtain.css(on: curtain.host(of: tab.address)))
                     tab.built?.evaluateInSearch(on ? AutoScroll.script : AutoScroll.off)
                 }
@@ -906,7 +926,7 @@ final class Browser: NSObject, ObservableObject {
             .sink { [weak self] on in
                 guard let self else { return }
                 if !on { linkStatus.dismiss() }
-                for tab in tabs + parkedTabs {
+                for tab in strip + parkedTabs {
                     tab.arm(hiding: curtain.css(on: curtain.host(of: tab.address)))
                     tab.built?.evaluateJavaScript(on ? HoveredLink.script : HoveredLink.off, in: nil, in: .defaultClient)
                 }
@@ -921,7 +941,7 @@ final class Browser: NSObject, ObservableObject {
                 // Each tab keeps whatever is hidden on the site it is showing:
                 // re-arming with nothing would quietly restore every element
                 // this person had taken off, everywhere.
-                for tab in tabs {
+                for tab in strip {
                     tab.arm(hiding: curtain.css(on: curtain.host(of: tab.address)))
                 }
                 announce(on ? "Passkeys offered again — reload the page" : "Sites will ask for a password instead")
@@ -955,7 +975,7 @@ final class Browser: NSObject, ObservableObject {
     }
 
     private func relook() {
-        Favicons.shared.relook(tabs.filter { !$0.asleep })
+        Favicons.shared.relook((tabs + essentials).filter { !$0.asleep })
     }
 
     func writeSession(now: Bool = false) {
@@ -963,19 +983,9 @@ final class Browser: NSObject, ObservableObject {
             now: now,
             space: spaceID,
             .init(
-                tabs: tabs.compactMap { tab in
-                    guard !tab.shy, !tab.bench else { return nil }
-                    // A sleeping tab holds its address in `pending`; asking for
-                    // it there too means a pin can never be written out of
-                    // existence by whatever its web view happens to be showing.
-                    guard let url = tab.pending ?? tab.address,
-                          url.scheme?.hasPrefix("http") == true
-                    else { return nil }
-                    return Session.Entry(
-                        url: url.absoluteString, title: tab.title, pin: tab.pin, name: tab.name
-                    )
-                },
-                active: tabs.firstIndex { $0.id == activeID } ?? 0
+                tabs: tabs.compactMap { sessionEntry(for: $0) },
+                active: tabs.firstIndex { $0.id == activeID } ?? 0,
+                essentials: essentials.compactMap { sessionEntry(for: $0) }
             )
         )
     }
@@ -1082,6 +1092,18 @@ final class Browser: NSObject, ObservableObject {
     /// ⌘W, or the cross on the tab. Closing the last one leaves a blank tab
     /// behind; closing that blank tab closes the window.
     func close(_ tab: Tab) {
+        if tab.essential {
+            if floating == tab.id { land() }
+            tab.rest()
+            let others = strip.filter { $0.id != tab.id && !$0.asleep }
+            if let back = others.max(by: { $0.touched < $1.touched }) {
+                select(back)
+            } else {
+                newTab()
+            }
+            writeSession(now: true)
+            return
+        }
         guard let index = tabs.firstIndex(where: { $0.id == tab.id }) else { return }
 
         // A tab whose page is out in the little window takes the window with
@@ -1197,12 +1219,20 @@ final class Browser: NSObject, ObservableObject {
 
     /// Dragged from one place in the row to another.
     func move(_ tab: Tab, to index: Int) {
+        if tab.essential {
+            guard let here = essentials.firstIndex(where: { $0.id == tab.id }),
+                  index != here, essentials.indices.contains(index)
+            else { return }
+            essentials.move(fromOffsets: IndexSet(integer: here), toOffset: index > here ? index + 1 : index)
+            rememberSession()
+            return
+        }
         guard let here = tabs.firstIndex(where: { $0.id == tab.id }),
               index != here, tabs.indices.contains(index)
         else { return }
         // The pinned block and the loose one don't mix: a letter that wandered
         // into the middle of the titles would stop meaning anything.
-        let pinned = pinnedCount
+        let pinned = spacePins
         if tab.pin != nil, index >= pinned { return }
         if tab.pin == nil, index < pinned { return }
         tabs.move(fromOffsets: IndexSet(integer: here), toOffset: index > here ? index + 1 : index)
@@ -1210,14 +1240,16 @@ final class Browser: NSObject, ObservableObject {
     }
 
     func step(_ direction: Int) {
-        guard tabs.count > 1, let here = tabs.firstIndex(where: { $0.id == activeID }) else { return }
-        let next = (here + direction + tabs.count) % tabs.count
-        select(tabs[next])
+        let row = strip
+        guard row.count > 1, let here = row.firstIndex(where: { $0.id == activeID }) else { return }
+        let next = (here + direction + row.count) % row.count
+        select(row[next])
     }
 
     func select(index: Int) {
-        guard tabs.indices.contains(index) else { return }
-        select(tabs[index])
+        let row = strip
+        guard row.indices.contains(index) else { return }
+        select(row[index])
     }
 
     /// A link opened from a page lands next to the page it came from, not at
@@ -1510,7 +1542,7 @@ final class Browser: NSObject, ObservableObject {
         // The window closes whatever else is true. Tying that to the bookkeeping
         // is how a little window outlives the thing that opened it.
         if floater.showing { floater.drop() }
-        guard let id = floating, let tab = tabs.first(where: { $0.id == id }) else { return }
+        guard let id = floating, let tab = strip.first(where: { $0.id == id }) else { return }
         floating = nil
         tab.floating = false
         tab.web.evaluateInSearch(Isolate.off)
@@ -1691,7 +1723,7 @@ final class Browser: NSObject, ObservableObject {
     /// the tab strip, except you read it only when you ask for it.
     private func openPages(matching typed: String) -> [Suggestion] {
         let needle = typed.trimmingCharacters(in: .whitespaces).lowercased()
-        return tabs
+        return strip
             .filter { $0.id != activeID && !$0.isBlank }
             .filter { tab in
                 guard !needle.isEmpty else { return true }
@@ -1718,7 +1750,7 @@ final class Browser: NSObject, ObservableObject {
     /// resting cursor would otherwise rewrite the field before you had moved.
     func take(_ offer: Suggestion) {
         summoning = false
-        if let id = offer.tab, let tab = tabs.first(where: { $0.id == id }) {
+        if let id = offer.tab, let tab = find(id) {
             select(tab)
         } else {
             (active ?? tabs.first)?.go(to: offer.url)
@@ -2136,7 +2168,7 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
     }
 
     func tab(for webView: WKWebView) -> Tab? {
-        tabs.first { $0.built === webView }
+        strip.first { $0.built === webView } ?? parkedTabs.first { $0.built === webView }
     }
 }
 
