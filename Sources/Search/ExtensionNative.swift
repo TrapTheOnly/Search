@@ -62,8 +62,23 @@ enum ExtensionNative {
         throw Refused(why: "Specified native messaging host not found.")
     }
 
+    /// Whether this extension asked for nativeMessaging itself, not only the
+    /// shim channel Search added so it can answer chrome.* APIs WebKit lacks.
+    static func permitsMessaging(_ extensionID: String) -> Bool {
+        if (Store.settings.stringArray(forKey: "extensions.granted.\(extensionID)") ?? []).contains("nativeMessaging") {
+            return true
+        }
+        let folder = Store.folder.appendingPathComponent("Extensions", isDirectory: true).appendingPathComponent(extensionID, isDirectory: true)
+        let added = Set((try? JSONSerialization.jsonObject(with: Data(contentsOf: folder.appendingPathComponent(".search-added")))) as? [String] ?? [])
+        let declared = Set(((try? JSONSerialization.jsonObject(with: Data(contentsOf: folder.appendingPathComponent("manifest.json")))) as? [String: Any])?["permissions"] as? [String] ?? [])
+        return declared.contains("nativeMessaging") && !added.contains("nativeMessaging")
+    }
+
     /// `runtime.sendNativeMessage`: run, send one, read one, stop.
     static func send(_ message: Any, to name: String, from extensionID: String) async throws -> Any? {
+        guard permitsMessaging(extensionID) else {
+            throw Refused(why: "Access to the specified native messaging host is forbidden.")
+        }
         let program = try host(name, for: extensionID)
         let pipe = HostPipe(program: program, origin: "chrome-extension://\(extensionID)/")
         try pipe.start()
@@ -76,6 +91,9 @@ enum ExtensionNative {
     /// end lets go.
     @MainActor
     static func connect(_ port: WKWebExtension.MessagePort, from extensionID: String) throws {
+        guard permitsMessaging(extensionID) else {
+            throw Refused(why: "Access to the specified native messaging host is forbidden.")
+        }
         guard let name = port.applicationIdentifier else { throw Refused(why: "No host named") }
         let program = try host(name, for: extensionID)
         let pipe = HostPipe(program: program, origin: "chrome-extension://\(extensionID)/")

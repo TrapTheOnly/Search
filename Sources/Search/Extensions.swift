@@ -29,6 +29,9 @@ struct Installed: Codable, Identifiable, Equatable {
     /// The permissions it was installed with, so an update that asks for more
     /// is asked about rather than slipped through.
     var permissions: [String]
+    /// Host match patterns it was installed with (or last accepted on update).
+    /// Optional so a list written before hosts were persisted still reads.
+    var hosts: [String]? = nil
     /// Kept in the row beside the menu rather than only in it. Optional, so
     /// a list written before there was pinning still reads.
     var pinned: Bool? = nil
@@ -133,6 +136,13 @@ final class Extensions: NSObject, ObservableObject {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] tabs in self?.follow(tabs) }
             .store(in: &bag)
+        browser.$spaces
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                guard let self, let tabs = self.browser?.tabs else { return }
+                self.follow(tabs)
+            }
+            .store(in: &bag)
         browser.$activeID
             .removeDuplicates()
             .scan((nil, nil)) { ($0.1, $1) }
@@ -182,15 +192,24 @@ final class Extensions: NSObject, ObservableObject {
     private func follow(_ tabs: [Tab]) {
         let now = tabs.filter(seen)
         let ids = now.map(\.id)
+        // Switching spaces parks the old row; enter() keeps those WKWebViews
+        // alive. Don't tell extensions the tabs closed — they are hidden in
+        // another space until it is on screen again, or until the tab is gone.
+        let parked = Set((browser?.parkedTabs ?? []).map(\.id))
         let gone = order.filter { !ids.contains($0) }
         for id in gone {
+            if parked.contains(id) { continue }
             if let adapter = adapters[id] { controller.didCloseTab(adapter, windowIsClosing: false) }
             adapters[id] = nil
             watching[id] = nil
         }
         for tab in now where !order.contains(tab.id) {
-            controller.didOpenTab(adapter(for: tab))
-            watch(tab)
+            if adapters[tab.id] == nil {
+                controller.didOpenTab(adapter(for: tab))
+                watch(tab)
+            } else if watching[tab.id] == nil {
+                watch(tab)
+            }
         }
         // Moves: anything whose position changed among the ones that stayed.
         let stayed = order.filter { ids.contains($0) }
@@ -199,6 +218,12 @@ final class Extensions: NSObject, ObservableObject {
             if let adapter = adapters[id] { controller.didMoveTab(adapter, from: index, in: window) }
         }
         order = ids
+        let living = Set(ids).union(parked)
+        for id in adapters.keys where !living.contains(id) {
+            if let adapter = adapters[id] { controller.didCloseTab(adapter, windowIsClosing: false) }
+            adapters[id] = nil
+            watching[id] = nil
+        }
     }
 
     private func watch(_ tab: Tab) {
@@ -241,14 +266,33 @@ final class Extensions: NSObject, ObservableObject {
             // — localStorage, IndexedDB — is filed under its origin.
             if let stable = URL(string: "\(Extensions.scheme)://\(item.id)/") { context.baseURL = stable }
             context.isInspectable = true
-            // Installing was the consent: everything it asked for then is
-            // granted each time it loads. Optional ones are asked for when
-            // the extension asks.
+            // Installing was the consent: only what it asked for then — and
+            // what permissions.request later added — is granted. The shim
+            // channel ("search") still needs nativeMessaging so the browser
+            // can answer APIs WebKit lacks; real native hosts are refused
+            // unless nativeMessaging was actually requested.
+            let added = Extensions.added(in: folder)
             for permission in found.requestedPermissions {
-                context.setPermissionStatus(.grantedExplicitly, for: permission)
+                let name = permission.rawValue
+                if permission == .nativeMessaging {
+                    context.setPermissionStatus(.grantedExplicitly, for: permission)
+                    continue
+                }
+                if added.contains(name) || allows(name, for: item.id) {
+                    context.setPermissionStatus(.grantedExplicitly, for: permission)
+                }
             }
-            context.setPermissionStatus(.grantedExplicitly, for: .nativeMessaging)
-            for pattern in found.allRequestedMatchPatterns {
+            let consentedHosts: Set<String>
+            if let stored = item.hosts {
+                consentedHosts = Set(stored)
+            } else {
+                consentedHosts = Set(found.allRequestedMatchPatterns.map(\.string))
+                if let index = installed.firstIndex(where: { $0.id == item.id }) {
+                    installed[index].hosts = consentedHosts.sorted()
+                    save()
+                }
+            }
+            for pattern in found.allRequestedMatchPatterns where consentedHosts.contains(pattern.string) {
                 context.setPermissionStatus(.grantedExplicitly, for: pattern)
             }
             try controller.load(context)
@@ -372,7 +416,8 @@ final class Extensions: NSObject, ObservableObject {
                let index = installed.firstIndex(where: { $0.id == id }) {
                 installed[index].name = found.displayName ?? installed[index].name
                 installed[index].version = found.version ?? installed[index].version
-                installed[index].permissions = found.requestedPermissions.map(\.rawValue).sorted()
+                installed[index].permissions = Extensions.consentedAPIs(found, in: target)
+                installed[index].hosts = Extensions.hosts(of: found)
                 save()
             }
             guard let item = installed.first(where: { $0.id == id }), item.enabled else { return }
@@ -458,7 +503,8 @@ final class Extensions: NSObject, ObservableObject {
         try files.moveItem(at: staged, to: finalFolder)
         let item = Installed(
             id: id, name: name, version: found.version ?? "?", enabled: true, fromStore: fromStore,
-            permissions: found.requestedPermissions.map(\.rawValue).sorted(),
+            permissions: Extensions.consentedAPIs(found, in: finalFolder),
+            hosts: Extensions.hosts(of: found),
             source: source?.path
         )
         installed.removeAll { $0.id == id }
@@ -551,7 +597,8 @@ final class Extensions: NSObject, ObservableObject {
 
     /// Once a day, the store is asked whether anything installed from it has
     /// a newer version; if so it is fetched, checked and swapped in. One that
-    /// asks for more than it was installed with is asked about first.
+    /// asks for more APIs or host access than it was installed with is asked
+    /// about first.
     func checkForUpdates() {
         let key = "extensions.checked"
         let last = Store.settings.object(forKey: key) as? Date ?? .distantPast
@@ -584,8 +631,19 @@ final class Extensions: NSObject, ObservableObject {
             try Crx.unpack(zip, into: staged)
             try ExtensionShims.prepare(staged)
             let found = try await WKWebExtension(resourceBaseURL: staged)
-            let wants = Set(found.requestedPermissions.map(\.rawValue))
-            if !wants.isSubset(of: Set(item.permissions)) {
+            let wants = Set(Extensions.consentedAPIs(found, in: staged))
+            let newHosts = Set(Extensions.hosts(of: found))
+            let currentFolder = Extensions.folder(for: item.id)
+            let baselineAPIs = Set(item.permissions).union(Extensions.consentedAPIs(from: currentFolder))
+            let baselineHosts: Set<String>
+            if let stored = item.hosts {
+                baselineHosts = Set(stored)
+            } else if let current = try? await WKWebExtension(resourceBaseURL: currentFolder) {
+                baselineHosts = Set(Extensions.hosts(of: current))
+            } else {
+                baselineHosts = []
+            }
+            if !wants.isSubset(of: baselineAPIs) || !newHosts.isSubset(of: baselineHosts) {
                 guard await ask(install: "An update to \(item.name)", wants: Extensions.describe(found, in: staged), icon: found.icon(for: CGSize(width: 64, height: 64))) else {
                     try? FileManager.default.removeItem(at: staged)
                     return
@@ -598,6 +656,7 @@ final class Extensions: NSObject, ObservableObject {
             if let index = installed.firstIndex(where: { $0.id == item.id }) {
                 installed[index].version = found.version ?? version
                 installed[index].permissions = wants.sorted()
+                installed[index].hosts = newHosts.sorted()
                 save()
                 if installed[index].enabled { await load(installed[index]) }
             }
@@ -616,6 +675,42 @@ final class Extensions: NSObject, ObservableObject {
     }
 
     // MARK: - asking
+
+    /// Permissions Search added so the shim can run, not ones the extension asked for.
+    static func added(in folder: URL) -> Set<String> {
+        Set((try? JSONSerialization.jsonObject(with: Data(contentsOf: folder.appendingPathComponent(".search-added")))) as? [String] ?? [])
+    }
+
+    /// `permissions` in the (possibly shim-amended) manifest.
+    static func declared(in folder: URL) -> Set<String> {
+        Set(((try? JSONSerialization.jsonObject(with: Data(contentsOf: folder.appendingPathComponent("manifest.json")))) as? [String: Any])?["permissions"] as? [String] ?? [])
+    }
+
+    /// APIs the package asked for, not counting ones Search added for itself.
+    static func consentedAPIs(_ found: WKWebExtension, in folder: URL) -> [String] {
+        let added = added(in: folder)
+        return Array(Set(found.requestedPermissions.map(\.rawValue)).union(declared(in: folder)).subtracting(added)).sorted()
+    }
+
+    static func consentedAPIs(from folder: URL) -> Set<String> {
+        declared(in: folder).subtracting(added(in: folder))
+    }
+
+    static func hosts(of found: WKWebExtension) -> [String] {
+        found.allRequestedMatchPatterns.map(\.string).sorted()
+    }
+
+    /// Install-time grants (the stored list, plus the original manifest) and
+    /// anything later allowed through permissions.request.
+    func allows(_ permission: String, for id: String) -> Bool {
+        if let item = installed.first(where: { $0.id == id }), item.permissions.contains(permission) {
+            return true
+        }
+        if (Store.settings.stringArray(forKey: "extensions.granted.\(id)") ?? []).contains(permission) {
+            return true
+        }
+        return Extensions.consentedAPIs(from: Extensions.folder(for: id)).contains(permission)
+    }
 
     /// What an extension wants, in words.
     static func describe(_ found: WKWebExtension, in folder: URL) -> [String] {
@@ -827,7 +922,13 @@ extension Extensions: WKWebExtensionControllerDelegate {
 
     func webExtensionController(_ controller: WKWebExtensionController, promptForPermissions permissions: Set<WKWebExtension.Permission>, in tab: (any WKWebExtensionTab)?, for extensionContext: WKWebExtensionContext) async -> (Set<WKWebExtension.Permission>, Date?) {
         let detail = permissions.map(\.rawValue).sorted().joined(separator: ", ")
-        return await ask("asks for more access", detail: detail, context: extensionContext) ? (permissions, nil) : ([], nil)
+        let yes = await ask("asks for more access", detail: detail, context: extensionContext)
+        if yes {
+            let id = extensionContext.uniqueIdentifier
+            let had = Store.settings.stringArray(forKey: "extensions.granted.\(id)") ?? []
+            Store.settings.set(Array(Set(had + permissions.map(\.rawValue))).sorted(), forKey: "extensions.granted.\(id)")
+        }
+        return yes ? (permissions, nil) : ([], nil)
     }
 
     func webExtensionController(_ controller: WKWebExtensionController, promptForPermissionToAccess urls: Set<URL>, in tab: (any WKWebExtensionTab)?, for extensionContext: WKWebExtensionContext) async -> (Set<URL>, Date?) {
@@ -844,7 +945,12 @@ extension Extensions: WKWebExtensionControllerDelegate {
     func webExtensionController(_ controller: WKWebExtensionController, promptForPermissionMatchPatterns matchPatterns: Set<WKWebExtension.MatchPattern>, in tab: (any WKWebExtensionTab)?, for extensionContext: WKWebExtensionContext) async -> (Set<WKWebExtension.MatchPattern>, Date?) {
         let all = matchPatterns.contains { $0.matchesAllHosts || $0.matchesAllURLs }
         let what = all ? "every website" : matchPatterns.map(\.string).sorted().joined(separator: ", ")
-        return await ask("wants to read and change \(what)", detail: "Until you remove the extension.", context: extensionContext) ? (matchPatterns, nil) : ([], nil)
+        let yes = await ask("wants to read and change \(what)", detail: "Until you remove the extension.", context: extensionContext)
+        if yes, let index = installed.firstIndex(where: { $0.id == extensionContext.uniqueIdentifier }) {
+            installed[index].hosts = Array(Set((installed[index].hosts ?? []) + matchPatterns.map(\.string))).sorted()
+            save()
+        }
+        return yes ? (matchPatterns, nil) : ([], nil)
     }
 
     func webExtensionController(_ controller: WKWebExtensionController, didUpdate action: WKWebExtension.Action, forExtensionContext context: WKWebExtensionContext) {
@@ -870,6 +976,7 @@ extension Extensions: WKWebExtensionControllerDelegate {
             return try await ExtensionShims.answer(message, from: extensionContext, owner: self)
         }
         let id = extensionContext.uniqueIdentifier, host = applicationIdentifier!
+        try await allowNativeHost(host, for: id, context: extensionContext)
         do {
             return try await ExtensionNative.send(message, to: host, from: id)
         } catch {
@@ -884,7 +991,24 @@ extension Extensions: WKWebExtensionControllerDelegate {
     }
 
     func webExtensionController(_ controller: WKWebExtensionController, connectUsing port: WKWebExtension.MessagePort, for extensionContext: WKWebExtensionContext) async throws {
-        try ExtensionNative.connect(port, from: extensionContext.uniqueIdentifier)
+        let id = extensionContext.uniqueIdentifier
+        guard let host = port.applicationIdentifier else { throw ExtensionNative.Refused(why: "No host named") }
+        try await allowNativeHost(host, for: id, context: extensionContext)
+        try ExtensionNative.connect(port, from: id)
+    }
+
+    /// A real native-messaging host, not the in-process "search" shim: the
+    /// extension must have asked for nativeMessaging, and the first launch
+    /// of that host is confirmed.
+    private func allowNativeHost(_ host: String, for id: String, context: WKWebExtensionContext) async throws {
+        guard ExtensionNative.permitsMessaging(id) || allows("nativeMessaging", for: id) else {
+            throw ExtensionNative.Refused(why: "Access to the specified native messaging host is forbidden.")
+        }
+        let key = "extensions.nativeHost.\(id).\(host)"
+        if Store.settings.object(forKey: key) as? Bool == true { return }
+        let yes = await ask("wants to run “\(host)”", detail: "This extension wants to talk to a program on this Mac. Only allow it if you trust both.", context: context)
+        guard yes else { throw ExtensionNative.Refused(why: "Access to the specified native messaging host is forbidden.") }
+        Store.settings.set(true, forKey: key)
     }
 }
 

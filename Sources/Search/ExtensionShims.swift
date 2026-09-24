@@ -162,10 +162,13 @@ enum ExtensionShims {
             scripts.append((empty ? "-" : "") + path)
         }
         let shipped = (try? JSONSerialization.data(withJSONObject: scripts.sorted())).flatMap { String(data: $0, encoding: .utf8) } ?? "[]"
+        let extra = Store.settings.stringArray(forKey: "extensions.granted.\(folder.lastPathComponent)") ?? []
+        let granted = (try? JSONSerialization.data(withJSONObject: extra)).flatMap { String(data: $0, encoding: .utf8) } ?? "[]"
         return script.replacingOccurrences(of: "__SEARCH_EVENTS__", with: list)
             .replacingOccurrences(of: "__SEARCH_SCRIPTS__", with: shipped)
             .replacingOccurrences(of: "__SEARCH_CHROME__", with: Crx.chromeVersion)
             .replacingOccurrences(of: "__SEARCH_VERBOSE__", with: Store.testing ? "true" : "false")
+            .replacingOccurrences(of: "__SEARCH_GRANTED__", with: granted)
     }
 
     /// Defines only what is missing, so the day WebKit implements an API,
@@ -540,14 +543,31 @@ enum ExtensionShims {
       gather(runtime && runtime.onMessage);
       gather(runtime && runtime.onMessageExternal);
 
-      // Whole namespaces WebKit lacks, answered by the browser.
+      // Whole namespaces WebKit lacks, answered by the browser — only if
+      // this extension was granted that permission (manifest or a later
+      // permissions.request). Native `run` checks again; this object graph
+      // is not trusted.
+      const manifest = (() => { try { return runtime.getManifest() || {}; } catch (e) { return {}; } })();
+      const declared = new Set(manifest.permissions || []);
+      const grantedNames = new Set([...declared, ...__SEARCH_GRANTED__]);
+      const installers = {};
+      let attachIdle = () => {};
+      const expose = (name) => {
+        grantedNames.add(name);
+        if (installers[name]) installers[name]();
+        if (name.startsWith("system.") && installers.system) installers.system();
+        if (name === "idle") attachIdle();
+      };
       const define = (name, methods, events = [], extra = {}) => {
-        if (chrome[name]) return;
-        const api = Object.assign({}, extra);
-        for (const m of methods) api[m] = call(name + "." + m);
-        for (const e of events) api[e] = event();
-        put(chrome, name, api);
-        if (root.browser && root.browser !== chrome && !root.browser[name]) put(root.browser, name, api);
+        installers[name] = () => {
+          if (chrome[name]) return;
+          const api = Object.assign({}, extra);
+          for (const m of methods) api[m] = call(name + "." + m);
+          for (const e of events) api[e] = event();
+          put(chrome, name, api);
+          if (root.browser && root.browser !== chrome && !root.browser[name]) put(root.browser, name, api);
+        };
+        if (grantedNames.has(name)) installers[name]();
       };
       define("bookmarks",
         ["get", "getChildren", "getRecent", "getSubTree", "getTree", "search", "create", "move", "update", "remove", "removeTree"],
@@ -585,10 +605,13 @@ enum ExtensionShims {
       });
       const settings = (prefix, names) =>
         Object.fromEntries(names.map((n) => [n, setting(prefix + "." + n)]));
-      const put2 = (name, api) => {
-        if (chrome[name]) return;
-        put(chrome, name, api);
-        if (root.browser && root.browser !== chrome && !root.browser[name]) put(root.browser, name, api);
+      const put2 = (name, api, perms = [name]) => {
+        installers[name] = () => {
+          if (chrome[name]) return;
+          put(chrome, name, api);
+          if (root.browser && root.browser !== chrome && !root.browser[name]) put(root.browser, name, api);
+        };
+        if (perms.some((p) => grantedNames.has(p))) installers[name]();
       };
       // Something only Chrome can do, answered the way Chrome answers when
       // it can't: a rejection, or lastError for a callback.
@@ -602,7 +625,8 @@ enum ExtensionShims {
       define("search", ["query"]);
       define("idle", ["queryState", "getAutoLockDelay"], [],
         { IdleState: { ACTIVE: "active", IDLE: "idle", LOCKED: "locked" } });
-      if (chrome.idle && !chrome.idle.onStateChanged) {
+      attachIdle = () => {
+        if (!chrome.idle || chrome.idle.onStateChanged) return;
         // Asked every so often while anyone listens, the way Chrome
         // notices on its own.
         const changed = event(), add = changed.addListener;
@@ -618,7 +642,8 @@ enum ExtensionShims {
         };
         put(chrome.idle, "onStateChanged", changed);
         put(chrome.idle, "setDetectionInterval", (seconds) => { every = Math.max(15, Number(seconds) || 60); });
-      }
+      };
+      attachIdle();
       define("power", ["requestKeepAwake", "releaseKeepAwake", "reportActivity"]);
       define("browsingData",
         ["remove", "removeAppcache", "removeCache", "removeCacheStorage", "removeCookies", "removeDownloads",
@@ -634,7 +659,7 @@ enum ExtensionShims {
         storage: { getInfo: call("system.storage.getInfo"), ejectDevice: refuse("system.storage.ejectDevice"),
                    getAvailableCapacity: refuse("system.storage.getAvailableCapacity"), onAttached: event(), onDetached: event() },
         display: { getInfo: call("system.display.getInfo"), onDisplayChanged: event() },
-      });
+      }, ["system.cpu", "system.memory", "system.storage", "system.display"]);
       put2("privacy", {
         services: settings("privacy.services", ["alternateErrorPagesEnabled", "autofillAddressEnabled",
           "autofillCreditCardEnabled", "autofillEnabled", "passwordSavingEnabled", "safeBrowsingEnabled",
@@ -1124,8 +1149,6 @@ enum ExtensionShims {
           "identity.email", "idle", "power", "privacy", "browsingData", "sessions", "topSites", "search", "system.cpu",
           "system.memory", "system.storage", "system.display", "readingList", "contentSettings", "proxy", "favicon",
           "clipboardRead", "geolocation", "userScripts"]);
-        const manifest = (() => { try { return runtime.getManifest() || {}; } catch (e) { return {}; } })();
-        const declared = new Set(manifest.permissions || []);
         const split = (list = []) => ({
           theirs: list.filter((p) => webkit.has(p)), mine: list.filter((p) => ours.has(p)),
           unknown: list.filter((p) => !webkit.has(p) && !ours.has(p)),
@@ -1151,6 +1174,7 @@ enum ExtensionShims {
             const have = await granted();
             const missing = mine.filter((m) => !have.has(m));
             if (missing.length && !(await native("permissions.request", [missing]))) return false;
+            missing.forEach(expose);
           }
           return theirs.length || origins.length ? request({ permissions: theirs, origins }) : true;
         }));
@@ -1906,7 +1930,15 @@ enum ExtensionShims {
         let first = args.first
         let id = context.uniqueIdentifier
 
-        if api.hasPrefix("setting.") { return setting(api, first as? [String: Any] ?? [:], extension: id, owner: owner) }
+        if let needed = permission(for: api) {
+            try allow(needed, id: id, owner: owner)
+        }
+        if api.hasPrefix("setting.") {
+            let name = api.split(separator: ":", maxSplits: 1).dropFirst().first.map(String.init) ?? ""
+            if name.hasPrefix("privacy.") { try allow("privacy", id: id, owner: owner) }
+            else if name.hasPrefix("proxy.") { try allow("proxy", id: id, owner: owner) }
+            return setting(api, first as? [String: Any] ?? [:], extension: id, owner: owner)
+        }
 
         switch api {
         // MARK: bookmarks
@@ -2441,7 +2473,7 @@ enum ExtensionShims {
             if let inline = source["code"] as? String {
                 code += inline + "\n;\n"
             } else if let file = source["file"] as? String,
-                      let text = try? String(contentsOf: folder.appendingPathComponent(file.trimmingCharacters(in: CharacterSet(charactersIn: "/"))), encoding: .utf8) {
+                      let text = try? String(contentsOf: try resolvedFile(file, inside: folder), encoding: .utf8) {
                 code += text + "\n;\n"
             }
         }
@@ -2474,6 +2506,49 @@ enum ExtensionShims {
         let url = dir.appendingPathComponent(name)
         if !FileManager.default.fileExists(atPath: url.path) { try text.write(to: url, atomically: true, encoding: .utf8) }
         return "_search/" + name
+    }
+
+    /// A path the extension named, resolved and kept inside its own folder.
+    /// `..` and a symlink that leaves the folder are refused.
+    private static func resolvedFile(_ file: String, inside folder: URL) throws -> URL {
+        var relative = file.trimmingCharacters(in: .whitespacesAndNewlines)
+        while relative.hasPrefix("/") { relative.removeFirst() }
+        let parts = relative.split(separator: "/").map(String.init)
+        guard !relative.isEmpty, !parts.isEmpty, parts.allSatisfy({ $0 != ".." && !$0.isEmpty }) else {
+            throw Unsupported(what: "Invalid user script path")
+        }
+        let root = folder.resolvingSymlinksInPath().standardizedFileURL
+        let url = parts.reduce(folder) { $0.appendingPathComponent($1) }.resolvingSymlinksInPath().standardizedFileURL
+        let prefix = root.path.hasSuffix("/") ? root.path : root.path + "/"
+        guard url.path == root.path || url.path.hasPrefix(prefix) else {
+            throw Unsupported(what: "user script file is outside the extension")
+        }
+        return url
+    }
+
+    /// Permission a shim API requires, or nil for the internal channel.
+    private static func permission(for api: String) -> String? {
+        let space = api.split(separator: ".").first.map(String.init) ?? api
+        switch space {
+        case "bookmarks", "history", "downloads", "sidePanel", "offscreen", "fontSettings",
+             "management", "notifications", "tts", "identity", "search", "idle", "power",
+             "browsingData", "sessions", "topSites", "readingList", "tabGroups", "userScripts":
+            return space
+        case "system":
+            if api.hasPrefix("system.cpu.") { return "system.cpu" }
+            if api.hasPrefix("system.memory.") { return "system.memory" }
+            if api.hasPrefix("system.storage.") { return "system.storage" }
+            if api.hasPrefix("system.display.") { return "system.display" }
+            return nil
+        default:
+            return nil
+        }
+    }
+
+    private static func allow(_ permission: String, id: String, owner: Extensions) throws {
+        guard owner.allows(permission, for: id) else {
+            throw Unsupported(what: "This extension does not have the \(permission) permission")
+        }
     }
 
     /// Popups extensions set for their buttons: per tab, or "*" for all.

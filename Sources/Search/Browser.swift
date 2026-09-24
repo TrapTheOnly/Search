@@ -1994,7 +1994,7 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
     }
 
     func tab(for webView: WKWebView) -> Tab? {
-        tabs.first { $0.built === webView }
+        tabs.first { $0.built === webView } ?? parkedTabs.first { $0.built === webView }
     }
 }
 
