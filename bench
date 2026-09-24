@@ -61,6 +61,9 @@
     ./bench ui KEY VALUE               settings/passwords/welcome/history/downloads/bookmarks/hidden on|off,
                                        look light|dark|system, sidebar on|off, spaces on|off, hides on|off,
                                        folded on|off, peek on|off, peeklink keep|close, pages120 on|off
+    ./bench pin ID                     pin a tab to this space — --test runs only
+    ./bench unpin ID                   unpin a tab — --test runs only
+    ./bench essential ID [on|off]      make / remove Essential (all spaces) — --test runs only
 
 Needs Settings › General › "Let a script drive Search" switched on in the
 running app. IDs are the first characters of a tab's id, as `tabs` prints
@@ -253,6 +256,13 @@ def main(argv):
         request["action"], request["path"] = args[0], os.path.abspath(args[1])
         if len(args) > 2: request["frames"] = int(args[2])
         if len(args) > 3: request["every"] = float(args[3])
+    elif verb in ("pin", "unpin"):
+        if len(args) != 1: sys.exit(f"usage: bench {verb} ID")
+        request["id"] = args[0]
+    elif verb == "essential":
+        if not 1 <= len(args) <= 2: sys.exit("usage: bench essential ID [on|off]")
+        request["id"] = args[0]
+        request["on"] = (args[1] if len(args) > 1 else "on") in ("on", "true", "1", "yes")
     elif verb not in ("tabs", "probe", "extensions"):
         sys.exit(f"unknown command “{verb}” — see bench help")
 
@@ -271,10 +281,23 @@ def main(argv):
         value = answer.get("value")
         print(value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, indent=2))
     elif verb == "tabs":
-        for tab in answer.get("tabs", []):
-            mark = "⚗" if tab.get("bench") else ("●" if tab.get("active") else " ")
-            state = " …" if tab.get("loading") else (" z" if tab.get("asleep") else "")
-            print(f"{mark} {tab['id']}  {tab.get('title') or '—'}  {tab.get('url')}{state}")
+        for label, key in (("essentials", "essentials"), ("pins", "pins"), ("tabs", "tabs")):
+            rows = answer.get(key) or ([] if key != "tabs" else answer.get("tabs", []))
+            if key != "tabs" and not rows:
+                continue
+            if key != "tabs":
+                print(f"# {label}")
+            for tab in (rows if key != "tabs" else answer.get("tabs", [])):
+                mark = "⚗" if tab.get("bench") else ("●" if tab.get("active") else " ")
+                flags = []
+                if tab.get("essential"): flags.append("essential")
+                if tab.get("pin"): flags.append(f"pin:{tab['pin']}")
+                state = " …" if tab.get("loading") else (" z" if tab.get("asleep") else "")
+                extra = f"  [{', '.join(flags)}]" if flags else ""
+                print(f"{mark} {tab['id']}  {tab.get('title') or '—'}  {tab.get('url')}{extra}{state}")
+        # raw JSON for agents
+        if os.environ.get("BENCH_JSON"):
+            print(json.dumps(answer, ensure_ascii=False))
     else:
         print(json.dumps(answer, ensure_ascii=False, indent=2))
     return 0
