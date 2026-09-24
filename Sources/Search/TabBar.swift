@@ -169,8 +169,15 @@ struct TabBar: View {
         .onDrop(of: [.url, .text], isTargeted: $landing) { providers in
             browser.take(providers)
         }
-        .background(landing ? Palette.hover : .clear)
+        .background {
+            ZStack {
+                ChromeFill(colour: browser.prefs.usesSpaces ? browser.space.colour : nil, clearWhenPlain: true)
+                if landing { Palette.hover }
+            }
+        }
         .animation(Motion.quick, value: landing)
+        .animation(Motion.quick, value: browser.space.colour)
+        .animation(Motion.quick, value: browser.spaceID)
         .animation(Motion.glide, value: browser.activeID)
         // The row makes room for the field on the same spring as everything
         // else. Without this the widths changed between one frame and the next

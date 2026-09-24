@@ -18,8 +18,8 @@ import WebKit
 struct Space: Codable, Identifiable, Equatable {
     var id: UUID
     var name: String
-    /// Which of `Spaces.colours` — from before spaces had icons; kept so an
-    /// older list still reads.
+    /// Which of `Spaces.colours` washes the chrome (tab strip / sidebar) on
+    /// top of Look. Icons name the space in the UI; colour only tints.
     var colour: Int
     /// Its icon, one of `Spaces.icons`.
     var icon: String?
@@ -41,15 +41,60 @@ struct Space: Codable, Identifiable, Equatable {
 }
 
 enum Spaces {
-    static let colours: [Color] = [
-        Color(red: 0.45, green: 0.47, blue: 0.52), // slate
-        Color(red: 0.26, green: 0.52, blue: 0.96), // blue
-        Color(red: 0.20, green: 0.66, blue: 0.45), // green
-        Color(red: 0.96, green: 0.62, blue: 0.20), // orange
-        Color(red: 0.90, green: 0.33, blue: 0.40), // red
-        Color(red: 0.62, green: 0.40, blue: 0.90), // violet
+    /// RGB for each named tint — shared by SwiftUI swatches and the chrome wash.
+    static let colourRGB: [(CGFloat, CGFloat, CGFloat)] = [
+        (0.45, 0.47, 0.52), // slate
+        (0.26, 0.52, 0.96), // blue
+        (0.20, 0.66, 0.45), // green
+        (0.96, 0.62, 0.20), // orange
+        (0.90, 0.33, 0.40), // red
+        (0.62, 0.40, 0.90), // violet
     ]
+
+    static let colours: [Color] = colourRGB.map { Color(red: $0.0, green: $0.1, blue: $0.2) }
     static let colourNames = ["Slate", "Blue", "Green", "Orange", "Red", "Violet"]
+
+    /// Clamp a stored index into `colours` (older files may be out of range).
+    static func colourIndex(_ raw: Int) -> Int {
+        guard !colourRGB.isEmpty else { return 0 }
+        let n = colourRGB.count
+        return ((raw % n) + n) % n
+    }
+
+    /// A soft wash of a space colour over chrome. Opacity follows the window's
+    /// appearance so the tint sits on Look rather than replacing light/dark.
+    static func chromeWash(_ raw: Int) -> Color {
+        Color(nsColor: chromeWashNS(raw))
+    }
+
+    static func chromeWashNS(_ raw: Int) -> NSColor {
+        let i = colourIndex(raw)
+        let rgb = colourRGB[i]
+        return NSColor(name: nil) { appearance in
+            let dim = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+            // Slate stays quieter; vivid colours a touch more present in dark.
+            let vivid = i != 0
+            let alpha: CGFloat = dim ? (vivid ? 0.20 : 0.09) : (vivid ? 0.12 : 0.055)
+            return NSColor(srgbRed: rgb.0, green: rgb.1, blue: rgb.2, alpha: alpha)
+        }
+    }
+
+    /// Solid swatch for menus — the full colour, not the wash.
+    static func swatchNS(_ raw: Int) -> NSColor {
+        let rgb = colourRGB[colourIndex(raw)]
+        return NSColor(srgbRed: rgb.0, green: rgb.1, blue: rgb.2, alpha: 1)
+    }
+
+    static func swatchImage(_ raw: Int) -> NSImage {
+        let size = NSSize(width: 12, height: 12)
+        let image = NSImage(size: size)
+        image.lockFocus()
+        swatchNS(raw).setFill()
+        NSBezierPath(roundedRect: NSRect(origin: .zero, size: size), xRadius: 3, yRadius: 3).fill()
+        image.unlockFocus()
+        image.isTemplate = false
+        return image
+    }
 
     /// The icons a space can wear: Apple's own symbols, drawn in one weight
     /// and one grey, grouped as work, thinking, leisure and life.
@@ -213,11 +258,17 @@ extension Browser {
         return Spaces.icons.first { !used.contains($0) } ?? "briefcase"
     }
 
+    /// The tint a new space gets unless told: the first colour no space wears yet.
+    var freeColour: Int {
+        let used = Set(spaces.map { Spaces.colourIndex($0.colour) })
+        return (0..<Spaces.colourRGB.count).first { !used.contains($0) } ?? 0
+    }
+
     /// A new space, empty, and on screen — signed in where the others are,
     /// or starting afresh with its own cookies and sign-ins.
-    func addSpace(named name: String, icon: String? = nil, sharesSignIns: Bool = true) {
+    func addSpace(named name: String, icon: String? = nil, colour: Int? = nil, sharesSignIns: Bool = true) {
         makingSpace = false
-        let made = Space(id: UUID(), name: name, colour: 0, icon: icon ?? freeIcon, sharesSignIns: sharesSignIns)
+        let made = Space(id: UUID(), name: name, colour: colour ?? freeColour, icon: icon ?? freeIcon, sharesSignIns: sharesSignIns)
         spaces.append(made)
         Spaces.write(spaces)
         switchSpace(to: made.id)
@@ -252,6 +303,12 @@ extension Browser {
     func setSpaceIcon(_ id: UUID, to icon: String) {
         guard let at = spaces.firstIndex(where: { $0.id == id }) else { return }
         spaces[at].icon = icon
+        Spaces.write(spaces)
+    }
+
+    func setSpaceColour(_ id: UUID, to colour: Int) {
+        guard let at = spaces.firstIndex(where: { $0.id == id }) else { return }
+        spaces[at].colour = Spaces.colourIndex(colour)
         Spaces.write(spaces)
     }
 
@@ -303,6 +360,11 @@ struct SpaceDot: View {
 
     private var symbol: String { browser.makingSpace ? "plus" : browser.space.symbol }
     private var key: String { browser.makingSpace ? "new" : "\(browser.spaceID.uuidString)-\(browser.space.symbol)" }
+    private var dotFill: Color {
+        if hovering { return Palette.hover }
+        guard browser.prefs.usesSpaces, !browser.makingSpace else { return .clear }
+        return Spaces.chromeWash(browser.space.colour)
+    }
 
     var body: some View {
         Button { SpaceMenu.show(for: browser) } label: {
@@ -321,13 +383,14 @@ struct SpaceDot: View {
             .clipped()
             .background(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(hovering ? Palette.hover : .clear)
+                    .fill(dotFill)
             )
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
         .help("\(browser.space.name) — ⌃1–⌃9, or two fingers \(browser.prefs.sidebar ? "sideways" : "up or down") over the tabs, to switch")
+        .animation(Motion.quick, value: browser.space.colour)
         .onChange(of: key) { _, now in
             let symbol = symbol
             DispatchQueue.main.async {
@@ -386,6 +449,17 @@ enum SpaceMenu {
         let icon = NSMenuItem(title: "Icon", action: nil, keyEquivalent: "")
         icon.submenu = icons
         menu.addItem(icon)
+        let tints = NSMenu()
+        for (index, name) in Spaces.colourNames.enumerated() {
+            let choice = item(name, checked: Spaces.colourIndex(here.colour) == index) {
+                browser.setSpaceColour(here.id, to: index)
+            }
+            choice.image = Spaces.swatchImage(index)
+            tints.addItem(choice)
+        }
+        let tint = NSMenuItem(title: "Colour", action: nil, keyEquivalent: "")
+        tint.submenu = tints
+        menu.addItem(tint)
         // The order is the swipe's, and ⌃1–⌃9's.
         if let at = browser.spaces.firstIndex(where: { $0.id == here.id }) {
             if at > 0 { menu.addItem(item("Move Left") { browser.moveSpace(here.id, to: at - 1) }) }

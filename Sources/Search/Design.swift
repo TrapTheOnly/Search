@@ -10,6 +10,9 @@ import AppKit
 // takes its appearance from the app, and the app from Settings › Appearance:
 // light, dark, or whatever the Mac is doing. Nothing else in the code knows
 // which it is.
+//
+// A space may add a soft chrome wash on top of that Look (`Spaces.chromeWash`);
+// the wash follows the same light/dark resolution and never replaces it.
 enum Palette {
     static let ground = Color(nsColor: NS.ground)
     static let ink = Color(nsColor: NS.ink)             // neutral-900 · neutral-100
@@ -51,6 +54,28 @@ enum Palette {
                 return NSColor(white: dim ? dark : light, alpha: 1)
             }
         }
+    }
+}
+
+/// Soft fill for tab strip / sidebar chrome: Look's ground, then a space tint
+/// on top when spaces are on. The page stays on plain `Palette.ground`.
+struct ChromeFill: View {
+    /// `nil` when spaces are off — plain ground (or clear, for the top strip
+    /// which used to sit transparent over the window).
+    var colour: Int?
+    /// Top strip historically drew nothing of its own; keep that when untinted.
+    var clearWhenPlain: Bool = false
+
+    var body: some View {
+        ZStack {
+            if let colour {
+                Palette.ground
+                Spaces.chromeWash(colour)
+            } else if !clearWhenPlain {
+                Palette.ground
+            }
+        }
+        .animation(Motion.quick, value: colour)
     }
 }
 
