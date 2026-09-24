@@ -10,9 +10,8 @@ struct Omnibox: View {
     /// Raised over a page by ⌘L, rather than standing on an empty tab.
     let over: Bool
 
-    /// The field's own height — the 22 of text and 14 of air above and below it
-    /// that `field` lays out — so the list can sit below it without being
-    /// stacked with it.
+    /// The field's own height — the 22 of text and 14 of air above and below,
+    /// laid out as one AppKit frame so the whole pill is the hit target.
     private static let fieldHeight: CGFloat = 22 + 14 * 2
 
     @State private var shake: CGFloat = 0
@@ -60,16 +59,18 @@ struct Omnibox: View {
 
     private var field: some View {
         AddressField(browser: browser)
-            .frame(height: 22)
             .padding(.horizontal, 22)
-            .padding(.vertical, 14)
+            .frame(height: Self.fieldHeight)
             .background {
                 ZStack {
                     // A slow, almost invisible breath under the field. It is
                     // the only thing on an empty tab, and a thing that never
                     // moves at all reads as a picture of an app rather than
-                    // an app.
+                    // an app. Hits pass through: the hosting view of an
+                    // NSViewRepresentable can sit above the field in AppKit
+                    // order even when its own hitTest is nil.
                     Breath()
+                        .allowsHitTesting(false)
 
                     RoundedRectangle(cornerRadius: 14, style: .continuous)
                         .fill(Palette.ground)
@@ -252,12 +253,18 @@ private struct Breath: NSViewRepresentable {
 /// here is the part you didn't type: the rest of the address, already there and
 /// selected, so carrying on typing replaces it and Return accepts it. That
 /// needs a real text field and its delegate.
+///
+/// The representable is a well that always fills the size SwiftUI proposes.
+/// An bare NSTextField kept its intrinsic ~19 pt text height inside the 50 pt
+/// pill, so most of the visible chrome hit the window's hosting view instead —
+/// I-beam and click-to-focus only on a thin band (24 Sep 2026).
 struct AddressField: NSViewRepresentable {
     @ObservedObject var browser: Browser
 
     func makeCoordinator() -> Coordinator { Coordinator(browser: browser) }
 
-    func makeNSView(context: Context) -> NSTextField {
+    func makeNSView(context: Context) -> Well {
+        let well = Well()
         let field = NSTextField()
         field.delegate = context.coordinator
         field.isBordered = false
@@ -277,10 +284,13 @@ struct AddressField: NSViewRepresentable {
                 .foregroundColor: NSColor(Palette.ink.opacity(0.3)),
             ]
         )
-        return field
+        well.field = field
+        well.addSubview(field)
+        return well
     }
 
-    func updateNSView(_ field: NSTextField, context: Context) {
+    func updateNSView(_ well: Well, context: Context) {
+        guard let field = well.field else { return }
         let coordinator = context.coordinator
         coordinator.browser = browser
 
@@ -313,6 +323,22 @@ struct AddressField: NSViewRepresentable {
                 ]
                 editor.selectAll(nil)
             }
+        }
+    }
+
+    /// Fills whatever size SwiftUI gives the representable, and keeps the
+    /// text field stretched to that — so the hit target matches the pill.
+    final class Well: NSView {
+        var field: NSTextField?
+
+        /// No opinion of its own: SwiftUI's `.frame(height:)` is the size.
+        override var intrinsicContentSize: NSSize {
+            NSSize(width: NSView.noIntrinsicMetric, height: NSView.noIntrinsicMetric)
+        }
+
+        override func layout() {
+            super.layout()
+            field?.frame = bounds
         }
     }
 
