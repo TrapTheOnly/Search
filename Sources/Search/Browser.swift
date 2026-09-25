@@ -8,7 +8,15 @@ import Combine
 
 @MainActor
 final class Browser: NSObject, ObservableObject {
-    @Published private(set) var tabs: [Tab] = []
+    @Published private(set) var tabs: [Tab] = [] {
+        didSet { tabSwitcher.tabsChanged(eligible: switcherEligibleIDs) }
+    }
+    let tabSwitcher = TabSwitcher()
+
+    /// Open tabs in this space (strip), for Option+Tab MRU — not other spaces.
+    var switcherEligibleIDs: [Tab.ID] {
+        strip.filter { !$0.bench }.map(\.id)
+    }
 
     func detach(_ tab: Tab) {
         if let here = tabs.firstIndex(where: { $0.id == tab.id }) {
@@ -26,9 +34,15 @@ final class Browser: NSObject, ObservableObject {
             // The tab just left is the tab just looked at. Whether a tab has
             // gone unwatched long enough to sleep is counted from here, not
             // from when it was first picked.
-            guard oldValue != activeID, let old = oldValue else { return }
+            guard oldValue != activeID else { return }
             linkStatus.dismiss()
-            strip.first { $0.id == old }?.touch()
+            let old = oldValue.flatMap { id in strip.first { $0.id == id } }
+            old?.touch()
+            tabSwitcher.cancel()
+            if let old { tabSwitcher.rememberPreview(of: old) }
+            if let activeID, strip.contains(where: { $0.id == activeID && !$0.bench }) {
+                tabSwitcher.record(activeID)
+            }
         }
     }
 
@@ -164,7 +178,9 @@ final class Browser: NSObject, ObservableObject {
     var active: Tab? { strip.first { $0.id == activeID } }
 
     /// Pins that stay in every space, then this space's own tabs.
-    @Published var essentials: [Tab] = []
+    @Published var essentials: [Tab] = [] {
+        didSet { tabSwitcher.tabsChanged(eligible: switcherEligibleIDs) }
+    }
 
     /// Named groups in this space's strip (folders are per-space).
     @Published var folders: [TabFolder] = []
@@ -1235,6 +1251,7 @@ final class Browser: NSObject, ObservableObject {
         // its place, the page is let go, and you land on whatever you were
         // looking at before. Only Unpin takes it out of the row.
         if tab.pin != nil {
+            tabSwitcher.forgetPreview(of: tab.id)
             tab.rest()
             // Ordinary tabs first. Falling back to the most recent tab of any
             // kind meant closing one pin landed you on another pin, and ⌘W
@@ -1428,6 +1445,12 @@ final class Browser: NSObject, ObservableObject {
         let row = strip
         guard row.indices.contains(index) else { return }
         select(row[index])
+    }
+
+    func commitTabSwitch(picking id: Tab.ID? = nil) {
+        guard let target = tabSwitcher.finish(picking: id),
+              let tab = strip.first(where: { $0.id == target }) else { return }
+        select(tab)
     }
 
     /// A link opened from a page lands next to the page it came from, not at
@@ -2389,6 +2412,7 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
         guard let tab = tab(for: webView) else { return }
+        tabSwitcher.forgetPreview(of: tab.id)
         if tab.id == activeID { linkStatus.dismiss() }
         tab.failure = nil
         tab.typing = false

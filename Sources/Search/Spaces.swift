@@ -268,6 +268,7 @@ extension Browser {
         if floater.showing { land() }
         endSplit()
         closeGlance()
+        tabSwitcher.cancel()
         writeSession(now: true)
 
         // The row on screen is parked as it is. Its sound stops: a space
