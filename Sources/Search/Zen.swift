@@ -66,6 +66,26 @@ extension Browser {
 
     var splitMate: Tab? { splitID.flatMap { id in strip.first { $0.id == id } } }
 
+    /// Ordered panes while split — left, then right. Nil when not split.
+    var splitPanes: (left: Tab, right: Tab)? {
+        guard let leftID = splitLeftID, let rightID = splitRightID,
+              let left = find(leftID), let right = find(rightID),
+              left.id != right.id
+        else { return nil }
+        return (left, right)
+    }
+
+    /// The two tab ids in the joint strip, leading then trailing.
+    var splitGroupIDs: [Tab.ID]? {
+        guard let left = splitLeftID, let right = splitRightID else { return nil }
+        return [left, right]
+    }
+
+    /// Whether this tab is one of the two panes.
+    func isSplitMember(_ tab: Tab) -> Bool {
+        tab.id == splitLeftID || tab.id == splitRightID
+    }
+
     var spacePins: Int { tabs.filter { $0.pin != nil && !$0.essential }.count }
 
     var pieces: [StripPiece] {
@@ -236,32 +256,194 @@ extension Browser {
 
     func splitAside(_ tab: Tab) {
         closeGlance()
+        let mate: Tab
         if tab.id == activeID {
             guard let other = strip.filter({ $0.id != tab.id && !$0.isBlank }).max(by: { $0.touched < $1.touched })
             else {
                 announce("Nothing to split with")
                 return
             }
-            splitID = other.id
-            if !other.wake() { other.revive() }
+            mate = other
         } else {
-            splitID = tab.id
-            if !tab.wake() { tab.revive() }
+            mate = tab
+        }
+        guard let focus = active, focus.id != mate.id else {
+            announce("Nothing to split with")
+            return
+        }
+        if !mate.wake() { mate.revive() }
+        withAnimation(Motion.settle) {
+            splitLeftID = focus.id
+            splitRightID = mate.id
+            splitID = mate.id
+            splitRatio = 0.5
         }
     }
 
-    func endSplit() { splitID = nil }
+    /// Open `tab` as a new pane on the given stage edge (snappy spring in).
+    func splitOnto(_ edge: SplitEdge, _ tab: Tab) {
+        closeGlance()
+        guard !tab.isBlank else { return }
+        if let panes = splitPanes {
+            // Already split: replace that side with the carried tab.
+            guard tab.id != panes.left.id, tab.id != panes.right.id else { return }
+            if !tab.wake() { tab.revive() }
+            withAnimation(Motion.settle) {
+                switch edge {
+                case .leading: splitLeftID = tab.id
+                case .trailing: splitRightID = tab.id
+                }
+                syncSplitMate()
+                splitRatio = edge == .leading ? Metrics.splitMin : (1 - Metrics.splitMin)
+            }
+            withAnimation(Motion.glide) { splitRatio = 0.5 }
+            return
+        }
+        guard let focus = active, focus.id != tab.id else {
+            // Carrying the only focused tab onto an edge: split with next recent.
+            splitAside(tab)
+            if splitPanes != nil {
+                withAnimation(Motion.settle) {
+                    if edge == .leading {
+                        swapSplit(animated: false)
+                    }
+                    splitRatio = edge == .leading ? Metrics.splitMin : (1 - Metrics.splitMin)
+                }
+                withAnimation(Motion.glide) { splitRatio = 0.5 }
+            }
+            return
+        }
+        if !tab.wake() { tab.revive() }
+        withAnimation(Motion.settle) {
+            switch edge {
+            case .leading:
+                splitLeftID = tab.id
+                splitRightID = focus.id
+            case .trailing:
+                splitLeftID = focus.id
+                splitRightID = tab.id
+            }
+            splitID = tab.id
+            splitRatio = edge == .leading ? Metrics.splitMin : (1 - Metrics.splitMin)
+        }
+        withAnimation(Motion.glide) { splitRatio = 0.5 }
+    }
+
+    func endSplit() {
+        splitID = nil
+        splitLeftID = nil
+        splitRightID = nil
+        splitRatio = 0.5
+        carryingTabID = nil
+        splitDropEdge = nil
+    }
+
+    /// Swap the two panes' sides; focus stays on the same tab.
+    func swapSplit(animated: Bool = true) {
+        guard let left = splitLeftID, let right = splitRightID else { return }
+        let apply = {
+            self.splitLeftID = right
+            self.splitRightID = left
+            self.splitRatio = 1 - self.splitRatio
+        }
+        if animated {
+            withAnimation(Motion.glide) { apply() }
+        } else {
+            apply()
+        }
+    }
+
+    /// Full-size one pane: end split and focus that tab.
+    func expandPane(_ tab: Tab) {
+        if tab.id != activeID { select(tab) }
+        withAnimation(Motion.settle) { endSplit() }
+    }
 
     /// The cross on a pane: back to one page, the tab itself stays.
     func closePane(_ tab: Tab) {
-        guard splitID != nil else { return }
-        if tab.id == splitID {
+        guard splitLeftID != nil else { return }
+        if tab.id == activeID, let mate = splitMate {
+            withAnimation(Motion.settle) {
+                endSplit()
+                select(mate)
+            }
+            return
+        }
+        withAnimation(Motion.settle) { endSplit() }
+    }
+
+    /// Drag-reorder within the joint strip: `from` becomes leading or trailing.
+    func reorderSplitGroup(from: Tab.ID, asTrailing: Bool) {
+        guard let left = splitLeftID, let right = splitRightID else { return }
+        guard from == left || from == right else { return }
+        let leading: Tab.ID
+        let other: Tab.ID
+        if asTrailing {
+            leading = from == left ? right : left
+            other = from
+        } else {
+            leading = from
+            other = from == left ? right : left
+        }
+        guard leading != splitLeftID else { return }
+        withAnimation(Motion.glide) {
+            splitLeftID = leading
+            splitRightID = other
+            splitRatio = 1 - splitRatio
+            syncSplitMate()
+        }
+        // Nudge strip order so the pair stays adjacent (loose tabs only).
+        if let moving = find(other), let anchor = find(leading),
+           moving.pin == nil, !moving.essential,
+           anchor.pin == nil, !anchor.essential,
+           let at = tabs.firstIndex(where: { $0.id == leading }) {
+            move(moving, to: min(asTrailing ? at + 1 : at, tabs.count - 1))
+        }
+    }
+
+    func beginCarry(_ id: Tab.ID) {
+        carryingTabID = id
+    }
+
+    func updateSplitDrop(at x: CGFloat, width: CGFloat) {
+        guard carryingTabID != nil, width > 0 else {
+            splitDropEdge = nil
+            return
+        }
+        let zone = Metrics.splitEdge
+        if x < zone {
+            splitDropEdge = .leading
+        } else if x > width - zone {
+            splitDropEdge = .trailing
+        } else {
+            splitDropEdge = nil
+        }
+    }
+
+    /// Finish a strip/sidebar drag: edge-drop opens or replaces a split pane.
+    func finishCarry() {
+        defer {
+            carryingTabID = nil
+            splitDropEdge = nil
+        }
+        guard let id = carryingTabID, let tab = find(id), let edge = splitDropEdge else { return }
+        // Don't edge-split a tab onto itself when it's already the only page.
+        if splitPanes == nil, tab.id == activeID { return }
+        splitOnto(edge, tab)
+    }
+
+    /// Keep `splitID` as the non-focused member of the pair.
+    func syncSplitMate() {
+        guard let left = splitLeftID, let right = splitRightID else {
             splitID = nil
             return
         }
-        if tab.id == activeID, let mate = splitMate {
-            splitID = nil
-            select(mate)
+        if activeID == left {
+            splitID = right
+        } else if activeID == right {
+            splitID = left
+        } else {
+            splitID = right
         }
     }
 
@@ -322,7 +504,7 @@ extension Browser {
     func move(_ tab: Tab, toSpace id: UUID) {
         guard id != spaceID, !tab.essential else { return }
         guard let index = tabs.firstIndex(where: { $0.id == tab.id }) else { return }
-        if splitID == tab.id { splitID = nil }
+        if splitID == tab.id || splitLeftID == tab.id || splitRightID == tab.id { endSplit() }
         detach(tab)
         if activeID == tab.id {
             let nextIndex = min(index, max(0, tabs.count - 1))
@@ -421,38 +603,429 @@ extension Browser {
     }
 }
 
-/// Two tabs side by side in the stage.
+/// Which stage edge a carried tab is hovering — drop opens/replaces that pane.
+enum SplitEdge: Equatable {
+    case leading, trailing
+}
+
+/// Two tabs side by side: resize handle, hold-drag swap, quiet chrome.
 struct SplitStage: View {
     @ObservedObject var browser: Browser
     let left: Tab
     let right: Tab
 
+    @State private var hoveringHandle = false
+    @State private var grabbingHandle = false
+    @State private var ratioAtGrab: CGFloat?
+    @State private var swapping: Tab.ID?
+    @State private var swapTravel: CGFloat = 0
+
     var body: some View {
-        HStack(spacing: 0) {
-            pane(left)
-            Rectangle().fill(Palette.hairline).frame(width: 1)
-            pane(right)
+        GeometryReader { geo in
+            let total = geo.size.width
+            let handle = Metrics.splitHandle
+            let ratio = min(max(browser.splitRatio, Metrics.splitMin), 1 - Metrics.splitMin)
+            let leftW = max(0, total * ratio - handle / 2)
+            let rightW = max(0, total - leftW - handle)
+
+            HStack(spacing: 0) {
+                pane(left, width: leftW, side: .leading)
+                divider(total: total)
+                    .frame(width: handle)
+                pane(right, width: rightW, side: .trailing)
+            }
+            .coordinateSpace(name: "split-stage")
+            .frame(width: total, height: geo.size.height)
+            .overlay { edgeDropBands(width: total, height: geo.size.height) }
+            .background(SplitDropProbe(browser: browser, width: total))
+        }
+        .animation(Motion.glide, value: browser.splitLeftID)
+        .animation(Motion.glide, value: browser.splitRightID)
+        .animation(grabbingHandle ? nil : Motion.settle, value: browser.splitRatio)
+    }
+
+    private func pane(_ tab: Tab, width: CGFloat, side: SplitEdge) -> some View {
+        let focused = tab.id == browser.activeID
+        let lift = swapping == tab.id ? swapTravel : 0
+        return VStack(spacing: 0) {
+            chrome(tab, side: side)
+            Page(tab: tab)
+                .clipShape(Rectangle())
+        }
+        .frame(width: width)
+        .overlay(alignment: .top) {
+            // Quiet focus: a 1pt ink hairline, not a Zen orange card border.
+            Rectangle()
+                .fill(Palette.ink.opacity(focused ? 0.14 : 0))
+                .frame(height: 1)
+        }
+        .offset(x: lift)
+        .zIndex(swapping == tab.id ? 1 : 0)
+        .contentShape(Rectangle())
+        .onTapGesture { browser.select(tab) }
+    }
+
+    private func chrome(_ tab: Tab, side: SplitEdge) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: "line.3.horizontal")
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(Palette.faint)
+                .padding(.trailing, 2)
+            Text(tab.label)
+                .font(.system(size: 11.5, weight: tab.id == browser.activeID ? .medium : .regular))
+                .foregroundStyle(tab.id == browser.activeID ? Palette.ink : Palette.muted)
+                .lineLimit(1)
+            Spacer(minLength: 0)
+            Door(icon: "arrow.up.left.and.arrow.down.right", help: "Full size") {
+                browser.expandPane(tab)
+            }
+            Door(icon: "xmark", help: "Close pane") {
+                browser.closePane(tab)
+            }
+        }
+        .padding(.horizontal, 8)
+        .frame(height: Metrics.splitChrome)
+        .background(tab.id == browser.activeID ? Palette.wash.opacity(0.85) : Palette.ground.opacity(0.5))
+        .contentShape(Rectangle())
+        .onTapGesture { browser.select(tab) }
+        .gesture(swapDrag(for: tab, side: side, width: 180))
+        .help(side == .leading ? "Hold and drag right to swap" : "Hold and drag left to swap")
+    }
+
+    private func divider(total: CGFloat) -> some View {
+        ZStack {
+            Rectangle()
+                .fill(Palette.hairline)
+                .frame(width: 1)
+            RoundedRectangle(cornerRadius: 1, style: .continuous)
+                .fill(Palette.ink.opacity(hoveringHandle || grabbingHandle ? 0.28 : 0))
+                .frame(width: 3, height: 36)
+        }
+        .frame(maxHeight: .infinity)
+        .contentShape(Rectangle())
+        .onHover { over in
+            hoveringHandle = over
+            if over { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() }
+        }
+        .gesture(
+            DragGesture(minimumDistance: 1, coordinateSpace: .named("split-stage"))
+                .onChanged { value in
+                    if ratioAtGrab == nil {
+                        ratioAtGrab = browser.splitRatio
+                        grabbingHandle = true
+                    }
+                    let base = ratioAtGrab ?? 0.5
+                    let next = base + value.translation.width / max(total, 1)
+                    browser.splitRatio = min(max(next, Metrics.splitMin), 1 - Metrics.splitMin)
+                }
+                .onEnded { _ in
+                    ratioAtGrab = nil
+                    grabbingHandle = false
+                }
+        )
+        .modifier(OneClick(double: true) {
+            withAnimation(Motion.settle) { browser.splitRatio = 0.5 }
+        })
+        .animation(Motion.quick, value: hoveringHandle)
+        .animation(Motion.quick, value: grabbingHandle)
+        .help("Drag to resize · double-click to balance")
+    }
+
+    private func swapDrag(for tab: Tab, side: SplitEdge, width: CGFloat) -> some Gesture {
+        DragGesture(minimumDistance: 16, coordinateSpace: .global)
+            .onChanged { value in
+                if swapping == nil { swapping = tab.id }
+                swapTravel = value.translation.width
+                let crossed = side == .leading
+                    ? value.translation.width > width * 0.45
+                    : value.translation.width < -width * 0.45
+                if crossed {
+                    browser.swapSplit()
+                    swapping = nil
+                    swapTravel = 0
+                }
+            }
+            .onEnded { _ in
+                withAnimation(Motion.settle) {
+                    swapping = nil
+                    swapTravel = 0
+                }
+            }
+    }
+
+    @ViewBuilder
+    private func edgeDropBands(width: CGFloat, height: CGFloat) -> some View {
+        if browser.carryingTabID != nil {
+            HStack(spacing: 0) {
+                dropBand(active: browser.splitDropEdge == .leading)
+                    .frame(width: Metrics.splitEdge, height: height)
+                Spacer(minLength: 0)
+                dropBand(active: browser.splitDropEdge == .trailing)
+                    .frame(width: Metrics.splitEdge, height: height)
+            }
+            .frame(width: width, height: height)
+            .allowsHitTesting(false)
+            .transition(.opacity)
         }
     }
 
-    private func pane(_ tab: Tab) -> some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 8) {
-                Text(tab.label)
-                    .font(.system(size: 11.5, weight: tab.id == browser.activeID ? .medium : .regular))
-                    .foregroundStyle(tab.id == browser.activeID ? Palette.ink : Palette.muted)
-                    .lineLimit(1)
-                Spacer(minLength: 0)
-                Door(icon: "xmark", help: "Close pane") { browser.closePane(tab) }
-            }
-            .padding(.horizontal, 10)
-            .frame(height: 28)
-            .background(tab.id == browser.activeID ? Palette.wash : Palette.ground)
-            .contentShape(Rectangle())
-            .onTapGesture { browser.select(tab) }
+    private func dropBand(active: Bool) -> some View {
+        RoundedRectangle(cornerRadius: 10, style: .continuous)
+            .fill(Palette.ink.opacity(active ? 0.10 : 0.04))
+            .padding(6)
+            .animation(Motion.quick, value: active)
+    }
+}
 
-            Page(tab: tab)
+/// Edge-drop bands when carrying a tab onto a single (unsplit) page.
+struct SplitEdgeDropAlone: View {
+    @ObservedObject var browser: Browser
+
+    var body: some View {
+        GeometryReader { geo in
+            HStack(spacing: 0) {
+                band(active: browser.splitDropEdge == .leading)
+                    .frame(width: Metrics.splitEdge, height: geo.size.height)
+                Spacer(minLength: 0)
+                band(active: browser.splitDropEdge == .trailing)
+                    .frame(width: Metrics.splitEdge, height: geo.size.height)
+            }
+            .background(SplitDropProbe(browser: browser, width: geo.size.width))
+            .allowsHitTesting(false)
         }
+        .transition(.opacity)
+    }
+
+    private func band(active: Bool) -> some View {
+        RoundedRectangle(cornerRadius: 10, style: .continuous)
+            .fill(Palette.ink.opacity(active ? 0.10 : 0.04))
+            .padding(6)
+            .animation(Motion.quick, value: active)
+    }
+}
+
+/// Tracks the pointer over the stage while a tab is carried, for edge-drop.
+struct SplitDropProbe: NSViewRepresentable {
+    @ObservedObject var browser: Browser
+    let width: CGFloat
+
+    func makeNSView(context: Context) -> NSView {
+        let view = ProbeView()
+        view.browser = browser
+        view.stageWidth = width
+        return view
+    }
+
+    func updateNSView(_ view: NSView, context: Context) {
+        (view as? ProbeView)?.browser = browser
+        (view as? ProbeView)?.stageWidth = width
+    }
+
+    final class ProbeView: NSView {
+        weak var browser: Browser?
+        var stageWidth: CGFloat = 0
+        private var monitor: Any?
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if window != nil { start() } else { stop() }
+        }
+
+        private func start() {
+            guard monitor == nil else { return }
+            monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDragged, .leftMouseUp]) { [weak self] event in
+                self?.track(event)
+                return event
+            }
+        }
+
+        private func stop() {
+            if let monitor {
+                NSEvent.removeMonitor(monitor)
+                self.monitor = nil
+            }
+        }
+
+        private func track(_ event: NSEvent) {
+            guard let browser, browser.carryingTabID != nil, let window else { return }
+            let local = convert(window.contentView?.convert(event.locationInWindow, from: nil) ?? event.locationInWindow, from: nil)
+            // locationInWindow is already in window base; convert from window content:
+            let point = convert(event.locationInWindow, from: nil)
+            _ = local
+            browser.updateSplitDrop(at: point.x, width: bounds.width > 1 ? bounds.width : stageWidth)
+            if event.type == .leftMouseUp {
+                // Carried's onEnded also calls finishCarry; this catches sidebar drags.
+                if browser.splitDropEdge != nil {
+                    browser.finishCarry()
+                }
+            }
+        }
+
+        deinit { stop() }
+    }
+}
+
+/// Joint strip for the two split tabs + unsplit control (mac-native, not Zen cards).
+struct SplitJointStrip: View {
+    @ObservedObject var browser: Browser
+    let left: Tab
+    let right: Tab
+    let width: CGFloat
+    let room: CGFloat
+    let pill: Namespace.ID
+    var vertical: Bool = false
+
+    var body: some View {
+        Group {
+            if vertical {
+                column
+            } else {
+                row
+            }
+        }
+    }
+
+    private var row: some View {
+        HStack(spacing: 2) {
+            member(left, trailing: false)
+            member(right, trailing: true)
+            Door(icon: "rectangle.split.1x2", help: "End Split") {
+                withAnimation(Motion.settle) { browser.endSplit() }
+            }
+            .padding(.leading, 2)
+        }
+        .padding(3)
+        .background(
+            RoundedRectangle(cornerRadius: 11, style: .continuous)
+                .fill(Palette.wash.opacity(0.55))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 11, style: .continuous)
+                .strokeBorder(Palette.hairline, lineWidth: 1)
+        )
+        .animation(Motion.glide, value: browser.splitLeftID)
+    }
+
+    private var column: some View {
+        VStack(spacing: 2) {
+            HStack(spacing: 6) {
+                Image(systemName: "rectangle.split.1x2")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(Palette.muted)
+                Text("Split")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(Palette.muted)
+                Spacer(minLength: 0)
+                Door(icon: "xmark", help: "End Split") {
+                    withAnimation(Motion.settle) { browser.endSplit() }
+                }
+            }
+            .padding(.horizontal, 6)
+            .padding(.top, 2)
+            memberRow(left, trailing: false)
+            memberRow(right, trailing: true)
+        }
+        .padding(4)
+        .background(
+            RoundedRectangle(cornerRadius: 11, style: .continuous)
+                .fill(Palette.wash.opacity(0.45))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 11, style: .continuous)
+                .strokeBorder(Palette.hairline, lineWidth: 1)
+        )
+    }
+
+    @ViewBuilder
+    private func member(_ tab: Tab, trailing: Bool) -> some View {
+        // Compact pill inside the joint — reuse TabMenu via a thin wrapper.
+        SplitJointPill(browser: browser, tab: tab, width: min(width, 140), room: room, pill: pill)
+            .modifier(Carried(
+                index: trailing ? 1 : 0,
+                count: 2,
+                step: min(width, 140) + Metrics.tabGap,
+                vertical: false,
+                space: "split-joint",
+                tabID: tab.id,
+                browser: browser
+            ) { target in
+                browser.reorderSplitGroup(from: tab.id, asTrailing: target == 1)
+            })
+    }
+
+    private func memberRow(_ tab: Tab, trailing: Bool) -> some View {
+        SplitJointSideRow(browser: browser, tab: tab)
+            .modifier(Carried(
+                index: trailing ? 1 : 0,
+                count: 2,
+                step: 30,
+                vertical: true,
+                space: "split-joint-side",
+                tabID: tab.id,
+                browser: browser
+            ) { target in
+                browser.reorderSplitGroup(from: tab.id, asTrailing: target == 1)
+            })
+    }
+}
+
+/// A strip pill used inside the joint group (shared TabMenu / select).
+private struct SplitJointPill: View {
+    @ObservedObject var browser: Browser
+    @ObservedObject var tab: Tab
+    let width: CGFloat
+    let room: CGFloat
+    let pill: Namespace.ID
+
+    @State private var hovering = false
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Mark(icon: browser.prefs.glyph == .icons ? tab.icon : nil, letter: tab.monogram, size: 13, dim: tab.asleep)
+            Text(tab.label)
+                .font(.system(size: 12, weight: tab.id == browser.activeID ? .medium : .regular))
+                .foregroundStyle(Palette.ink)
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 8)
+        .frame(width: width, height: 28)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(tab.id == browser.activeID ? Palette.wash : (hovering ? Palette.hover : .clear))
+        )
+        .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .onTapGesture { browser.select(tab) }
+        .onHover { hovering = $0 }
+        .contextMenu { TabMenu(browser: browser, tab: tab, close: { browser.close(tab) }) }
+        .animation(Motion.quick, value: hovering)
+    }
+}
+
+private struct SplitJointSideRow: View {
+    @ObservedObject var browser: Browser
+    @ObservedObject var tab: Tab
+    @State private var hovering = false
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Mark(icon: browser.prefs.glyph == .icons ? tab.icon : nil, letter: tab.monogram, size: 14, dim: tab.asleep)
+            Text(tab.label)
+                .font(.system(size: 12.5, weight: tab.id == browser.activeID ? .medium : .regular))
+                .foregroundStyle(Palette.ink)
+                .lineLimit(1)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 8)
+        .frame(height: 28)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(tab.id == browser.activeID ? Palette.wash : (hovering ? Palette.hover : .clear))
+        )
+        .contentShape(Rectangle())
+        .onTapGesture { browser.select(tab) }
+        .onHover { hovering = $0 }
+        .contextMenu { TabMenu(browser: browser, tab: tab, close: { browser.close(tab) }) }
+        .animation(Motion.quick, value: hovering)
     }
 }
 

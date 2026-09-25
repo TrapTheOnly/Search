@@ -172,8 +172,19 @@ final class Browser: NSObject, ObservableObject {
     /// Option-click / menu glance: a short-lived page over this one.
     @Published var glance: Glance?
 
-    /// The other pane when two tabs are split side by side.
+    /// The other pane when two tabs are split side by side (non-focused mate).
+    /// Physical left/right live in `splitLeftID` / `splitRightID`.
     @Published var splitID: Tab.ID?
+    /// Leading pane while split — independent of which tab is focused.
+    @Published var splitLeftID: Tab.ID?
+    /// Trailing pane while split.
+    @Published var splitRightID: Tab.ID?
+    /// Leading pane's share of the stage (0…1). Drag the handle to change it.
+    @Published var splitRatio: CGFloat = 0.5
+    /// Tab being dragged from the strip or sidebar — stage shows edge-drop zones.
+    @Published var carryingTabID: Tab.ID?
+    /// Which stage edge the carried tab is over, if any.
+    @Published var splitDropEdge: SplitEdge?
 
     var fieldShowing: Bool { editing || active?.isBlank ?? true }
 
@@ -1192,7 +1203,10 @@ final class Browser: NSObject, ObservableObject {
         cancelTabEdit()
         summoning = false
         suggesting = nil
+        // Keep physical left/right; only remapping the mate pointer so focus
+        // and splitID stay distinct. Pane order is splitLeftID / splitRightID.
         if splitID == tab.id { splitID = activeID }
+        syncSplitMate()
         guard tab.id != activeID else { return }
         // Coming back to the tab whose video is out brings it home first, so
         // it is never lifted and landed in the same breath.
@@ -1213,7 +1227,10 @@ final class Browser: NSObject, ObservableObject {
     /// ⌘W, or the cross on the tab. Closing the last one leaves a blank tab
     /// behind; closing that blank tab closes the window.
     func close(_ tab: Tab) {
-        if splitID == tab.id || (splitID != nil && tab.id == activeID) { splitID = nil }
+        if splitLeftID == tab.id || splitRightID == tab.id || splitID == tab.id
+            || (splitID != nil && tab.id == activeID) {
+            endSplit()
+        }
         if tab.essential {
             if floating == tab.id { land() }
             tab.rest()

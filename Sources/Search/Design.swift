@@ -163,6 +163,14 @@ enum Metrics {
     static let side: CGFloat = 232
     static let sideMin: CGFloat = 176
     static let sideMax: CGFloat = 440
+    /// Split panes: narrowest share either side may take while dragging.
+    static let splitMin: CGFloat = 0.22
+    /// Hit width of the resize handle between panes (drawn thinner).
+    static let splitHandle: CGFloat = 10
+    /// How far from the stage edge a carried tab must land to open a split.
+    static let splitEdge: CGFloat = 52
+    /// Quiet chrome band above each pane (expand / close), not a Zen card.
+    static let splitChrome: CGFloat = 26
 }
 
 // One spring for anything that moves between two places, one for anything that

@@ -200,7 +200,15 @@ struct TabBar: View {
                     pill: pill,
                     close: { browser.close(tab) }
                 )
-                .modifier(Carried(index: index, count: browser.essentials.count, step: step, vertical: false, space: "essentials") { target in
+                .modifier(Carried(
+                    index: index,
+                    count: browser.essentials.count,
+                    step: step,
+                    vertical: false,
+                    space: "essentials",
+                    tabID: tab.id,
+                    browser: browser
+                ) { target in
                     browser.movePin(tab, to: target)
                 })
                 .id(tab.id)
@@ -262,30 +270,55 @@ struct TabBar: View {
         case .essential:
             EmptyView()
         case .pin(let tab), .loose(let tab):
-            let step = (tab.pin != nil ? Metrics.pinWidth : width) + Metrics.tabGap
-            let tabIndex = browser.tabs.firstIndex(where: { $0.id == tab.id }) ?? index
-            TabPill(
-                browser: browser,
-                prefs: browser.prefs,
-                tab: tab,
-                live: tab.id == browser.activeID,
-                width: width,
-                room: room,
-                pill: pill,
-                close: { browser.close(tab) }
-            )
-            .modifier(Carried(index: tabIndex, count: browser.tabs.count, step: step, vertical: false, space: "strip") { target in
-                guard browser.tabs.indices.contains(target) else { return }
-                let dest = browser.tabs[target]
-                if tab.pin != nil || dest.pin != nil {
-                    browser.movePin(tab, to: target + browser.essentials.count)
-                } else if let folderID = dest.folderID,
-                          let folder = browser.folders.first(where: { $0.id == folderID }) {
-                    browser.place(tab, in: folder)
-                } else {
-                    browser.move(tab, to: target)
+            if let group = browser.splitGroupIDs, group.contains(tab.id) {
+                // Joint strip once, at the first of the pair in strip order.
+                if tab.id == group.first ||
+                    (browser.spaceShownPieces.first(where: { group.contains($0.id) })?.id == tab.id) {
+                    if let panes = browser.splitPanes {
+                        SplitJointStrip(
+                            browser: browser,
+                            left: panes.left,
+                            right: panes.right,
+                            width: width,
+                            room: room,
+                            pill: pill
+                        )
+                    }
                 }
-            })
+            } else {
+                let step = (tab.pin != nil ? Metrics.pinWidth : width) + Metrics.tabGap
+                let tabIndex = browser.tabs.firstIndex(where: { $0.id == tab.id }) ?? index
+                TabPill(
+                    browser: browser,
+                    prefs: browser.prefs,
+                    tab: tab,
+                    live: tab.id == browser.activeID,
+                    width: width,
+                    room: room,
+                    pill: pill,
+                    close: { browser.close(tab) }
+                )
+                .modifier(Carried(
+                    index: tabIndex,
+                    count: browser.tabs.count,
+                    step: step,
+                    vertical: false,
+                    space: "strip",
+                    tabID: tab.id,
+                    browser: browser
+                ) { target in
+                    guard browser.tabs.indices.contains(target) else { return }
+                    let dest = browser.tabs[target]
+                    if tab.pin != nil || dest.pin != nil {
+                        browser.movePin(tab, to: target + browser.essentials.count)
+                    } else if let folderID = dest.folderID,
+                              let folder = browser.folders.first(where: { $0.id == folderID }) {
+                        browser.place(tab, in: folder)
+                    } else {
+                        browser.move(tab, to: target)
+                    }
+                })
+            }
         case .folder(let folder, let members):
             FolderChip(browser: browser, folder: folder, members: members, width: min(140, max(72, width)))
         }
@@ -696,6 +729,8 @@ struct Carried: ViewModifier {
     /// The row's coordinate space, not the tab's: a tab that has just moved
     /// keeps its bearings (see the sidebar's grid).
     let space: String
+    var tabID: Tab.ID? = nil
+    var browser: Browser? = nil
     let move: (Int) -> Void
 
     @State private var held = false
@@ -722,6 +757,9 @@ struct Carried: ViewModifier {
                         if !held {
                             held = true
                             from = index
+                            if let tabID, let browser {
+                                browser.beginCarry(tabID)
+                            }
                         }
                         travel = vertical ? value.translation.height : value.translation.width
                         let target = min(max(0, from + Int((travel / step).rounded())), count - 1)
@@ -730,6 +768,7 @@ struct Carried: ViewModifier {
                         }
                     }
                     .onEnded { _ in
+                        browser?.finishCarry()
                         withAnimation(Motion.settle) {
                             held = false
                             travel = 0
