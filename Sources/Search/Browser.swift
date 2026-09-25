@@ -1210,19 +1210,17 @@ final class Browser: NSObject, ObservableObject {
         typed = ""
     }
 
-    /// ⌘W, or the cross on the tab. Closing the last one leaves a blank tab
-    /// behind; closing that blank tab closes the window.
+    /// ⌘W, or the cross on the tab. Closing the last awake page leaves a blank
+    /// tab behind only when nothing else remains; closing that blank closes the
+    /// window. Essentials are put down like pins — never respawned via `newTab`
+    /// or re-adopted when the strip is empty. Closing the last Essential (with
+    /// nothing else awake) closes the window, as a normal Mac app would.
     func close(_ tab: Tab) {
         if splitID == tab.id || (splitID != nil && tab.id == activeID) { splitID = nil }
         if tab.essential {
             if floating == tab.id { land() }
             tab.rest()
-            let others = strip.filter { $0.id != tab.id && !$0.asleep }
-            if let back = others.max(by: { $0.touched < $1.touched }) {
-                select(back)
-            } else {
-                newTab()
-            }
+            landAfterPuttingDown(except: tab.id, preferLoose: false)
             writeSession(now: true)
             return
         }
@@ -1241,30 +1239,41 @@ final class Browser: NSObject, ObservableObject {
             // Ordinary tabs first. Falling back to the most recent tab of any
             // kind meant closing one pin landed you on another pin, and ⌘W
             // bounced between the two instead of getting you out of them.
-            let others = tabs.filter { $0.id != tab.id && !$0.asleep }
-            let loose = others.filter { $0.pin == nil }
-            if let back = (loose.isEmpty ? others : loose).max(by: { $0.touched < $1.touched }) {
-                select(back)
-            } else if let asleepPin = tabs.first(where: { $0.id != tab.id }) {
-                select(asleepPin)
-            } else {
-                newTab()
-            }
+            landAfterPuttingDown(except: tab.id, preferLoose: true)
             writeSession(now: true)
             return
         }
 
         if tabs.count == 1 {
             if tab.isBlank {
-                NSApp.keyWindow?.performClose(nil)
+                // Keep the window if an Essential (or any other awake page)
+                // is still up. Asleep essentials alone do not keep it open —
+                // the user already put those down; closing the blank must
+                // close the window, not wake them again.
+                if let back = awakeFallback(except: tab.id) {
+                    tab.close()
+                    tabs = []
+                    select(back)
+                    rememberSession()
+                } else {
+                    NSApp.keyWindow?.performClose(nil)
+                }
             } else {
-                let fresh = Tab()
                 remember(tab, at: 0)
                 tab.close()
-                adopt(fresh)
-                tabs = [fresh]
-                activeID = fresh.id
-                typed = ""
+                // An Essential still open takes the page — do not spawn a
+                // blank that would later reopen essentials when closed.
+                if let back = awakeFallback(except: tab.id) {
+                    tabs = []
+                    select(back)
+                    rememberSession()
+                } else {
+                    let fresh = Tab()
+                    adopt(fresh)
+                    tabs = [fresh]
+                    activeID = fresh.id
+                    typed = ""
+                }
             }
             return
         }
@@ -1273,13 +1282,60 @@ final class Browser: NSObject, ObservableObject {
         tab.close()
         tabs.remove(at: index)
         if activeID == tab.id {
-            // The neighbour on the right, or the last one if there is no
-            // right — through select(), same as everywhere else you land on
-            // a tab, so one that was never built yet actually wakes up
-            // instead of sitting there blank until a manual reload.
-            select(tabs[min(index, tabs.count - 1)])
+            // Prefer an awake neighbour. Never wake a put-down pin or
+            // Essential — that reopened Essentials after close-all. If nothing
+            // awake remains, close the window.
+            let at = tabs.isEmpty ? nil : tabs[min(index, tabs.count - 1)]
+            if let at, !at.asleep {
+                select(at)
+            } else if let back = tabs.filter({ !$0.asleep }).max(by: { $0.touched < $1.touched }) {
+                select(back)
+            } else if let back = awakeFallback(except: tab.id) {
+                select(back)
+            } else {
+                NSApp.keyWindow?.performClose(nil)
+                return
+            }
         }
         rememberSession()
+    }
+
+    /// After ⌘W on a pin or Essential: land on another *awake* page only.
+    /// Never wake a put-down pin/Essential (that was the reopen/respawn bug),
+    /// and never `newTab()` after putting down the last Essential — close the
+    /// window instead, like a normal Mac app.
+    private func landAfterPuttingDown(except id: Tab.ID, preferLoose: Bool) {
+        let awake = strip.filter { $0.id != id && !$0.asleep }
+        let pool: [Tab] = {
+            guard preferLoose else { return awake }
+            let loose = awake.filter { $0.pin == nil && !$0.essential }
+            return loose.isEmpty ? awake : loose
+        }()
+        if let back = pool.max(by: { $0.touched < $1.touched }) {
+            select(back)
+            return
+        }
+        if preferLoose {
+            // Last pin put down and nothing else awake — leave a blank.
+            // Asleep Essentials stay put; closing that blank closes the window
+            // without waking them.
+            newTab()
+            return
+        }
+        // Another Essential still in the strip (even asleep) — land there.
+        // Closing one Essential must not close the window while others remain.
+        if let essential = essentials.first(where: { $0.id != id }) {
+            select(essential)
+            return
+        }
+        // Last Essential, nothing else awake — close the window.
+        NSApp.keyWindow?.performClose(nil)
+    }
+
+    /// Awake pages still in the strip besides `id` (Essentials included).
+    private func awakeFallback(except id: Tab.ID) -> Tab? {
+        strip.filter { $0.id != id && !$0.asleep }
+            .max(by: { $0.touched < $1.touched })
     }
 
     /// Everything but this one. Pinned tabs are put down rather than removed —

@@ -47,6 +47,16 @@ struct TabBar: View {
                     HStack(spacing: Metrics.tabGap) {
                         if !making, !browser.essentials.isEmpty {
                             essentialsStrip(in: geo.size.width, pill: pill)
+                            // Mac-native hairline between Essentials (squares)
+                            // and this space's pins / loose tabs — same mental
+                            // model as the sidebar Essentials | Pinned split.
+                            if browser.spacePins > 0 || browser.tabs.contains(where: { $0.pin == nil }) {
+                                Rectangle()
+                                    .fill(Palette.hairline)
+                                    .frame(width: 1, height: 18)
+                                    .padding(.horizontal, 3)
+                                    .accessibilityHidden(true)
+                            }
                         }
 
                         // The spaces, one above the other: up or down over the bar
@@ -315,7 +325,11 @@ struct TabBar: View {
     private func essentialsWidth() -> CGFloat {
         let n = browser.essentials.count
         guard n > 0 else { return 0 }
-        return CGFloat(n) * Metrics.pinWidth + CGFloat(max(0, n - 1)) * Metrics.tabGap
+        let squares = CGFloat(n) * Metrics.pinWidth + CGFloat(max(0, n - 1)) * Metrics.tabGap
+        // Hairline + its horizontal pad when the space row has pins or loose tabs.
+        let sep: CGFloat = (browser.spacePins > 0 || browser.tabs.contains(where: { $0.pin == nil }))
+            ? (1 + 6 + Metrics.tabGap) : 0
+        return squares + sep
     }
 
     /// The swipeable part of the run — this space's pins and loose tabs —
@@ -324,8 +338,8 @@ struct TabBar: View {
         let full = run(in: strip)
         let sticky = essentialsWidth()
         guard sticky > 0 else { return full }
-        // Gap between essentials and the space row is outside both frames
-        // (parent HStack spacing); subtract sticky only.
+        // Gap between essentials (+ separator) and the space row is outside
+        // both frames (parent HStack spacing); subtract sticky only.
         return max(0, full - sticky - Metrics.tabGap)
     }
 
@@ -344,6 +358,11 @@ struct TabBar: View {
         let count = Int(pinned + loose + headers)
         var total = pinned * Metrics.pinWidth + headers * min(140, max(72, each)) + loose * each
             + CGFloat(max(0, count - 1)) * Metrics.tabGap
+        // Essentials | pins hairline (width 1 + 6 pad + one HStack gap).
+        if !browser.essentials.isEmpty,
+           browser.spacePins > 0 || browser.tabs.contains(where: { $0.pin == nil }) {
+            total += 1 + 6 + Metrics.tabGap
+        }
         if let id = browser.editingTab, let tab = browser.strip.first(where: { $0.id == id }) {
             total += min(340, strip - Metrics.lights - 12) - (tab.pin != nil || tab.essential ? Metrics.pinWidth : each)
         }
