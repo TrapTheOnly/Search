@@ -444,6 +444,9 @@ struct SideBar: View {
             ZStack(alignment: .topLeading) {
                 VStack(spacing: SideBar.gap) {
                     ForEach(Array(tabs.enumerated()), id: \.element.id) { index, tab in
+                        if browser.isSplitMember(tab) {
+                            EmptyView()
+                        } else {
                         let held = pinDragging == tab.id
                         SideRow(
                             browser: browser,
@@ -461,6 +464,7 @@ struct SideBar: View {
                         .shadow(color: .black.opacity(held ? 0.14 : 0), radius: 12, y: 4)
                         .gesture(pinnedRowDrag(tab: tab, index: index, step: step, count: tabs.count))
                         .help("Pinned to this space")
+                        }
                     }
                 }
                 if let hint = dropHint, hint.zone == .pinned {
@@ -674,9 +678,19 @@ struct SideBar: View {
                 if pinDragging != tab.id {
                     pinDragging = tab.id
                     pinFrom = index
+                    browser.beginCarry(tab.id)
                     bumpHaptic(.loose)
                 }
                 pinTravel = CGSize(width: 0, height: value.translation.height)
+                // Drag out of the column → lift mini-window for edge split.
+                if abs(value.translation.width) > Metrics.splitLift,
+                   abs(value.translation.width) > abs(value.translation.height) {
+                    browser.liftCarry(at: browser.splitCarry.point == .zero
+                        ? CGPoint(x: Metrics.splitEdge + 8, y: 120)
+                        : browser.splitCarry.point)
+                    return
+                }
+                if browser.splitCarry.lifted { return }
                 // Above the loose list → pinned, or further → essentials.
                 if value.location.y < -8 {
                     if value.location.y < -8 - CGFloat(max(1, browser.spacePins)) * step - 20 {
@@ -719,12 +733,25 @@ struct SideBar: View {
                     dropHint = nil
                     hapticZone = nil
                 }
+                browser.finishCarry()
             }
     }
 
     private var loose: some View {
         ZStack(alignment: .topLeading) {
         VStack(spacing: SideBar.gap) {
+            if let panes = browser.splitPanes {
+                SplitJointStrip(
+                    browser: browser,
+                    left: panes.left,
+                    right: panes.right,
+                    width: 160,
+                    room: prefs.sideWidth,
+                    pill: pill,
+                    vertical: true
+                )
+                .padding(.bottom, 4)
+            }
             ForEach(Array(loosePieces.enumerated()), id: \.element.id) { index, piece in
                 switch piece {
                 case .folder(let folder, let members):
@@ -735,22 +762,26 @@ struct SideBar: View {
                         }
                     }
                 case .loose(let tab), .pin(let tab):
-                    let step = SideBar.row + SideBar.gap
-                    let held = pinDragging == tab.id
-                    SideRow(
-                        browser: browser,
-                        prefs: prefs,
-                        tab: tab,
-                        live: tab.id == browser.activeID,
-                        pill: pill,
-                        close: { browser.close(tab) },
-                        morph: morph
-                    )
-                    .offset(y: held ? pinTravel.height - CGFloat(index - pinFrom) * step : 0)
-                    .transaction { if held { $0.animation = nil } }
-                    .zIndex(held ? 1 : 0)
-                    .shadow(color: .black.opacity(held ? 0.14 : 0), radius: 12, y: 4)
-                    .gesture(looseDrag(tab: tab, index: index, step: step, count: loosePieces.count))
+                    if browser.isSplitMember(tab) {
+                        EmptyView()
+                    } else {
+                        let step = SideBar.row + SideBar.gap
+                        let held = pinDragging == tab.id
+                        SideRow(
+                            browser: browser,
+                            prefs: prefs,
+                            tab: tab,
+                            live: tab.id == browser.activeID,
+                            pill: pill,
+                            close: { browser.close(tab) },
+                            morph: morph
+                        )
+                        .offset(y: held ? pinTravel.height - CGFloat(index - pinFrom) * step : 0)
+                        .transaction { if held { $0.animation = nil } }
+                        .zIndex(held ? 1 : 0)
+                        .shadow(color: .black.opacity(held ? 0.14 : 0), radius: 12, y: 4)
+                        .gesture(looseDrag(tab: tab, index: index, step: step, count: loosePieces.count))
+                    }
                 case .essential:
                     EmptyView()
                 }

@@ -291,9 +291,51 @@ final class Bench {
                 answer(["split": ""])
                 return
             }
+            if request["swap"] as? Bool == true {
+                browser.swapSplit()
+                answer([
+                    "split": browser.splitID?.uuidString ?? "",
+                    "left": browser.splitLeftID?.uuidString ?? "",
+                    "right": browser.splitRightID?.uuidString ?? "",
+                    "ratio": browser.splitRatio,
+                ])
+                return
+            }
+            if let ratio = request["ratio"] as? Double {
+                browser.splitRatio = min(max(ratio, Metrics.splitMin), 1 - Metrics.splitMin)
+                answer(["ratio": browser.splitRatio])
+                return
+            }
+            if let edge = request["edge"] as? String {
+                guard let tab = find(request, in: browser) ?? browser.active else { answer(missing(request)); return }
+                let side: SplitEdge = {
+                    switch edge {
+                    case "leading", "left": return .leading
+                    case "trailing", "right": return .trailing
+                    case "top": return .top
+                    case "bottom": return .bottom
+                    default: return .trailing
+                    }
+                }()
+                browser.splitOnto(side, tab)
+                answer([
+                    "split": browser.splitID?.uuidString ?? "",
+                    "left": browser.splitLeftID?.uuidString ?? "",
+                    "right": browser.splitRightID?.uuidString ?? "",
+                    "ratio": browser.splitRatio,
+                    "axis": browser.splitAxis == .horizontal ? "horizontal" : "vertical",
+                ])
+                return
+            }
             guard let tab = find(request, in: browser) ?? browser.active else { answer(missing(request)); return }
             browser.splitAside(tab)
-            answer(["split": browser.splitID?.uuidString ?? "", "active": browser.activeID?.uuidString ?? ""])
+            answer([
+                "split": browser.splitID?.uuidString ?? "",
+                "active": browser.activeID?.uuidString ?? "",
+                "left": browser.splitLeftID?.uuidString ?? "",
+                "right": browser.splitRightID?.uuidString ?? "",
+                "ratio": browser.splitRatio,
+            ])
 
         case "folder":
             guard Store.testing else { answer(["error": "folder only works on a --test run"]); return }

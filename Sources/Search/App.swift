@@ -351,6 +351,8 @@ struct ContentView: View {
         .ignoresSafeArea()
         .animation(Motion.glide, value: browser.prefs.sidebar)
         .animation(Motion.glide, value: browser.splitID)
+        .animation(Motion.glide, value: browser.splitLeftID)
+        .animation(Motion.glide, value: browser.splitRightID)
         .animation(.easeOut(duration: 0.12), value: browser.active?.immersed)
         .onAppear { if room == nil { room = chrome } }
         .onChange(of: chrome) { old, new in make(room: new, after: old) }
@@ -358,8 +360,11 @@ struct ContentView: View {
 
     @ViewBuilder
     private var stage: some View {
-        if let tab = browser.active, let mate = browser.splitMate, mate.id != tab.id {
-            SplitStage(browser: browser, left: tab, right: mate)
+        if let panes = browser.splitPanes {
+            SplitStage(browser: browser, left: panes.left, right: panes.right)
+                .overlay {
+                    SplitDragOverlay(browser: browser, carry: browser.splitCarry)
+                }
                 .overlay {
                     if browser.prefs.showsLinks { LinkBubble(status: browser.linkStatus) }
                 }
@@ -370,7 +375,8 @@ struct ContentView: View {
                     }
                 }
                 .overlay(alignment: .topLeading) {
-                    if let asked = browser.suggesting, asked.tab == tab.id || asked.tab == mate.id {
+                    if let asked = browser.suggesting,
+                       asked.tab == panes.left.id || asked.tab == panes.right.id {
                         AccountList(browser: browser, asked: asked)
                             .transition(.opacity)
                     }
@@ -378,6 +384,9 @@ struct ContentView: View {
                 .animation(Motion.quick, value: browser.suggesting)
         } else if let tab = browser.active {
             Page(tab: tab)
+                .overlay {
+                    SplitDragOverlay(browser: browser, carry: browser.splitCarry)
+                }
                 .overlay {
                     if browser.prefs.showsLinks { LinkBubble(status: browser.linkStatus) }
                 }
@@ -547,9 +556,9 @@ struct ContentView: View {
             // is pressed the page is on its way, and the field is not what
             // there is to watch.
             .animation(browser.fieldShowing ? Motion.settle : Motion.quick, value: browser.fieldShowing)
-            // Glance opens on settle, closes on quick — same asymmetry as the field.
-            .animation(browser.glance != nil ? Motion.settle : Motion.quick, value: browser.glance != nil)
-            .animation(Motion.settle, value: browser.glanceLanding)
+            // Glance open and close both on flight — no hard pop either way.
+            .animation(Motion.flight, value: browser.glance != nil)
+            .animation(Motion.flight, value: browser.glanceLanding)
             .animation(Motion.settle, value: browser.peekLanding)
             .background(WindowSetup { window = $0; dress($0) })
             .onChange(of: browser.prefs.sidebar) { _, _ in

@@ -210,7 +210,15 @@ struct TabBar: View {
                     pill: pill,
                     close: { browser.close(tab) }
                 )
-                .modifier(Carried(index: index, count: browser.essentials.count, step: step, vertical: false, space: "essentials") { target in
+                .modifier(Carried(
+                    index: index,
+                    count: browser.essentials.count,
+                    step: step,
+                    vertical: false,
+                    space: "essentials",
+                    tabID: tab.id,
+                    browser: browser
+                ) { target in
                     browser.movePin(tab, to: target)
                 })
                 .id(tab.id)
@@ -272,30 +280,53 @@ struct TabBar: View {
         case .essential:
             EmptyView()
         case .pin(let tab), .loose(let tab):
-            let step = (tab.pin != nil ? Metrics.pinWidth : width) + Metrics.tabGap
-            let tabIndex = browser.tabs.firstIndex(where: { $0.id == tab.id }) ?? index
-            TabPill(
-                browser: browser,
-                prefs: browser.prefs,
-                tab: tab,
-                live: tab.id == browser.activeID,
-                width: width,
-                room: room,
-                pill: pill,
-                close: { browser.close(tab) }
-            )
-            .modifier(Carried(index: tabIndex, count: browser.tabs.count, step: step, vertical: false, space: "strip") { target in
-                guard browser.tabs.indices.contains(target) else { return }
-                let dest = browser.tabs[target]
-                if tab.pin != nil || dest.pin != nil {
-                    browser.movePin(tab, to: target + browser.essentials.count)
-                } else if let folderID = dest.folderID,
-                          let folder = browser.folders.first(where: { $0.id == folderID }) {
-                    browser.place(tab, in: folder)
-                } else {
-                    browser.move(tab, to: target)
+            if let group = browser.splitGroupIDs, group.contains(tab.id) {
+                // Joint strip once, at the first of the pair in strip order.
+                if browser.spaceShownPieces.first(where: { group.contains($0.id) })?.id == tab.id,
+                   let panes = browser.splitPanes {
+                    SplitJointStrip(
+                        browser: browser,
+                        left: panes.left,
+                        right: panes.right,
+                        width: width,
+                        room: room,
+                        pill: pill
+                    )
                 }
-            })
+            } else {
+                let step = (tab.pin != nil ? Metrics.pinWidth : width) + Metrics.tabGap
+                let tabIndex = browser.tabs.firstIndex(where: { $0.id == tab.id }) ?? index
+                TabPill(
+                    browser: browser,
+                    prefs: browser.prefs,
+                    tab: tab,
+                    live: tab.id == browser.activeID,
+                    width: width,
+                    room: room,
+                    pill: pill,
+                    close: { browser.close(tab) }
+                )
+                .modifier(Carried(
+                    index: tabIndex,
+                    count: browser.tabs.count,
+                    step: step,
+                    vertical: false,
+                    space: "strip",
+                    tabID: tab.id,
+                    browser: browser
+                ) { target in
+                    guard browser.tabs.indices.contains(target) else { return }
+                    let dest = browser.tabs[target]
+                    if tab.pin != nil || dest.pin != nil {
+                        browser.movePin(tab, to: target + browser.essentials.count)
+                    } else if let folderID = dest.folderID,
+                              let folder = browser.folders.first(where: { $0.id == folderID }) {
+                        browser.place(tab, in: folder)
+                    } else {
+                        browser.move(tab, to: target)
+                    }
+                })
+            }
         case .folder(let folder, let members):
             FolderChip(browser: browser, folder: folder, members: members, width: min(140, max(72, width)))
         }
@@ -715,42 +746,68 @@ struct Carried: ViewModifier {
     /// The row's coordinate space, not the tab's: a tab that has just moved
     /// keeps its bearings (see the sidebar's grid).
     let space: String
+    var tabID: Tab.ID? = nil
+    var browser: Browser? = nil
     let move: (Int) -> Void
 
     @State private var held = false
+    @State private var lifted = false
     @State private var from = 0
     @State private var travel: CGFloat = 0
 
     func body(content: Content) -> some View {
         // What it has travelled, less the ground its new place has already
-        // given it.
-        let shift = held ? travel - CGFloat(index - from) * step : 0
+        // given it. While lifted into the mini-window, the strip slot stays put.
+        let shift = held && !lifted ? travel - CGFloat(index - from) * step : 0
         return content
             .offset(x: vertical ? 0 : shift, y: vertical ? shift : 0)
-            // Under the hand exactly. Its place in the row springs when it
-            // passes another tab, and the offset springs back the same way —
-            // until the next move of the hand cuts the offset's spring short
-            // and leaves the place's running: the tab jumped a whole slot and
-            // drifted back each time it passed one. Only the others glide.
+            .opacity(lifted ? 0.35 : 1)
             .transaction { if held { $0.animation = nil } }
             .zIndex(held ? 1 : 0)
-            .shadow(color: .black.opacity(held ? 0.14 : 0), radius: 12, y: 4)
+            .shadow(color: .black.opacity(held && !lifted ? 0.14 : 0), radius: 12, y: 4)
             .gesture(
                 DragGesture(minimumDistance: 5, coordinateSpace: .named(space))
                     .onChanged { value in
                         if !held {
                             held = true
                             from = index
+                            if let tabID, let browser {
+                                browser.beginCarry(tabID)
+                            }
                         }
-                        travel = vertical ? value.translation.height : value.translation.width
+                        let dx = value.translation.width
+                        let dy = value.translation.height
+                        // Leave the strip → lift into the mini-window (Zen interaction).
+                        if !lifted {
+                            let out: Bool = {
+                                if vertical {
+                                    return abs(dx) > Metrics.splitLift && abs(dx) > abs(dy) * 1.1
+                                }
+                                return dy > Metrics.splitLift && dy > abs(dx) * 1.1
+                            }()
+                            if out, let browser {
+                                lifted = true
+                                browser.liftCarry(at: browser.splitCarry.point == .zero
+                                    ? CGPoint(x: 200, y: 120)
+                                    : browser.splitCarry.point)
+                            }
+                        }
+                        if lifted {
+                            // Probe tracks the pointer; keep travel quiet so reorder does not fight.
+                            travel = 0
+                            return
+                        }
+                        travel = vertical ? dy : dx
                         let target = min(max(0, from + Int((travel / step).rounded())), count - 1)
                         if target != index {
                             withAnimation(Motion.settle) { move(target) }
                         }
                     }
                     .onEnded { _ in
+                        browser?.finishCarry()
                         withAnimation(Motion.settle) {
                             held = false
+                            lifted = false
                             travel = 0
                         }
                     }

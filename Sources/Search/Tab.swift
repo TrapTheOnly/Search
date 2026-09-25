@@ -1262,6 +1262,7 @@ private final class GlanceForceAction: NSObject {
     @objc func recognizerWillBeginAnimation(_ recognizer: Any) {
         guard !opened else { return }
         opened = true
+        Haptics.generic()
         open(url)
     }
 
