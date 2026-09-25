@@ -199,8 +199,12 @@ final class Browser: NSObject, ObservableObject {
     @Published var splitRatio: CGFloat = 0.5
     /// Horizontal (side-by-side) or vertical (stacked) split.
     @Published var splitAxis: SplitAxis = .horizontal
+    /// Pane mid-maximize: ratio may leave the normal clamp while this is set.
+    @Published var splitExpandingID: Tab.ID?
     /// Lifted-tab / edge-drop state — separate object so the strip does not redraw every move.
     let splitCarry = SplitCarry()
+    /// Last joint-strip reorder commit — dampens thrash while dragging.
+    var lastSplitReorderAt: CFTimeInterval = 0
 
     var fieldShowing: Bool { editing || active?.isBlank ?? true }
 

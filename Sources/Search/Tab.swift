@@ -915,6 +915,12 @@ final class Tab: ObservableObject, Identifiable {
         }
     }
 
+    /// Hold a still of the live page over the stage while hierarchy remounts
+    /// (split maximize / similar). Cleared by `uncover`.
+    func freezeCover(_ image: NSImage) {
+        cover = image
+    }
+
     /// Set when WebKit said the page's process went away while nobody was
     /// looking at the tab. Coming back to it loads the page again rather
     /// than showing the white that is left.

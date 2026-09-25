@@ -166,9 +166,13 @@ enum Metrics {
     /// Split panes: narrowest share either side may take while dragging.
     static let splitMin: CGFloat = 0.22
     /// Hit width of the resize handle between panes (drawn thinner).
-    static let splitHandle: CGFloat = 10
-    /// How far from the stage edge a carried tab must land to open a split.
+    static let splitHandle: CGFloat = 14
+    /// Legacy thin edge band width — kept for reference; drop uses half-zones.
     static let splitEdge: CGFloat = 56
+    /// Center dead-zone (fraction of stage) before the drop side flips.
+    static let splitHysteresis: CGFloat = 0.10
+    /// Pane-swap: travel past this fraction of chrome width before committing.
+    static let splitSwapCommit: CGFloat = 0.62
     /// Quiet chrome band above each pane (expand / close), not a Zen card.
     static let splitChrome: CGFloat = 26
     /// Pull a strip tab this far into the stage to lift the mini-window.

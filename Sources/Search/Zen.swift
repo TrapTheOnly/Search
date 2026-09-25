@@ -282,7 +282,7 @@ extension Browser {
         Haptics.generic()
     }
 
-    /// Open `tab` as a new pane on the given stage edge (snappy spring in).
+    /// Open `tab` as a new pane on the given stage edge — always ~50/50, never a sliver.
     func splitOnto(_ edge: SplitEdge, _ tab: Tab) {
         closeGlance()
         guard !tab.isBlank else { return }
@@ -297,9 +297,8 @@ extension Browser {
                 case .trailing, .bottom: splitRightID = tab.id
                 }
                 syncSplitMate()
-                splitRatio = (edge == .leading || edge == .top) ? Metrics.splitMin : (1 - Metrics.splitMin)
+                splitRatio = 0.5
             }
-            withAnimation(Motion.glide) { splitRatio = 0.5 }
             Haptics.generic()
             return
         }
@@ -311,9 +310,8 @@ extension Browser {
                     if edge == .leading || edge == .top {
                         swapSplit(animated: false)
                     }
-                    splitRatio = (edge == .leading || edge == .top) ? Metrics.splitMin : (1 - Metrics.splitMin)
+                    splitRatio = 0.5
                 }
-                withAnimation(Motion.glide) { splitRatio = 0.5 }
                 Haptics.generic()
             }
             return
@@ -330,9 +328,8 @@ extension Browser {
                 splitRightID = tab.id
             }
             splitID = tab.id
-            splitRatio = (edge == .leading || edge == .top) ? Metrics.splitMin : (1 - Metrics.splitMin)
+            splitRatio = 0.5
         }
-        withAnimation(Motion.glide) { splitRatio = 0.5 }
         Haptics.generic()
     }
 
@@ -342,10 +339,12 @@ extension Browser {
         splitRightID = nil
         splitRatio = 0.5
         splitAxis = .horizontal
+        splitExpandingID = nil
         splitCarry.clear()
     }
 
     /// Swap the two panes' sides; focus stays on the same tab.
+    /// One commit per gesture — callers gate with hysteresis before calling.
     func swapSplit(animated: Bool = true) {
         guard let left = splitLeftID, let right = splitRightID else { return }
         let apply = {
@@ -361,30 +360,51 @@ extension Browser {
         Haptics.align()
     }
 
-    /// Full-size one pane: end split and focus that tab.
+    /// Full-size one pane: grow that side, then unsplit — keeps the WKWebView
+    /// mounted through the flight so the stage never flashes blank.
     func expandPane(_ tab: Tab) {
+        guard splitLeftID != nil, splitRightID != nil else { return }
         if tab.id != activeID { select(tab) }
-        withAnimation(Motion.flight) { endSplit() }
+        let growLeading = tab.id == splitLeftID
+        // Freeze a cover on the kept pane before hierarchy change (wake pattern).
+        if let built = tab.built, tab.cover == nil {
+            built.takeSnapshot(with: nil) { [weak tab] image, _ in
+                guard let tab, let image else { return }
+                DispatchQueue.main.async {
+                    if tab.cover == nil { tab.freezeCover(image) }
+                }
+            }
+        }
+        splitExpandingID = tab.id
+        withAnimation(Motion.flight) {
+            splitRatio = growLeading ? 1 : 0
+        }
         Haptics.generic()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.30) { [weak self] in
+            guard let self, self.splitExpandingID == tab.id else { return }
+            withAnimation(Motion.settle) { self.endSplit() }
+            tab.uncover(after: 0.35)
+        }
     }
 
-    /// The cross on a pane: back to one page, the tab itself stays.
+    /// The cross on a pane: back to one page, the other pane expands.
     func closePane(_ tab: Tab) {
-        guard splitLeftID != nil else { return }
-        if tab.id == activeID, let mate = splitMate {
-            withAnimation(Motion.flight) {
-                endSplit()
-                select(mate)
-            }
+        guard let left = splitLeftID, let right = splitRightID else { return }
+        let keepID = tab.id == left ? right : (tab.id == right ? left : nil)
+        guard let keepID, let keep = find(keepID) else {
+            withAnimation(Motion.flight) { endSplit() }
             return
         }
-        withAnimation(Motion.flight) { endSplit() }
+        expandPane(keep)
     }
 
     /// Drag-reorder within the joint strip: `from` becomes leading or trailing.
+    /// Ignores no-ops; gated so live drag cannot thrash hundreds of times/sec.
     func reorderSplitGroup(from: Tab.ID, asTrailing: Bool) {
         guard let left = splitLeftID, let right = splitRightID else { return }
         guard from == left || from == right else { return }
+        let now = CACurrentMediaTime()
+        guard now - lastSplitReorderAt > 0.28 else { return }
         let leading: Tab.ID
         let other: Tab.ID
         if asTrailing {
@@ -395,6 +415,7 @@ extension Browser {
             other = from == left ? right : left
         }
         guard leading != splitLeftID else { return }
+        lastSplitReorderAt = now
         withAnimation(Motion.glide) {
             splitLeftID = leading
             splitRightID = other
@@ -616,31 +637,44 @@ struct SplitStage: View {
     @State private var ratioAtGrab: CGFloat?
     @State private var swapping: Tab.ID?
     @State private var swapTravel: CGFloat = 0
+    @State private var swapCommitted = false
 
     private var horizontal: Bool { browser.splitAxis == .horizontal }
+    private var expanding: Bool { browser.splitExpandingID != nil }
 
     var body: some View {
         GeometryReader { geo in
-            let ratio = min(max(browser.splitRatio, Metrics.splitMin), 1 - Metrics.splitMin)
-            let handle = Metrics.splitHandle
+            let raw = browser.splitRatio
+            let ratio: CGFloat = expanding
+                ? min(max(raw, 0), 1)
+                : min(max(raw, Metrics.splitMin), 1 - Metrics.splitMin)
+            let handle = expanding ? 0 : Metrics.splitHandle
             Group {
                 if horizontal {
                     let first = max(0, geo.size.width * ratio - handle / 2)
                     let second = max(0, geo.size.width - first - handle)
                     HStack(spacing: 0) {
                         pane(left, primary: first, side: .leading)
-                        divider(span: geo.size.width)
-                            .frame(width: handle)
+                            .opacity(browser.splitExpandingID == right.id ? 0 : 1)
+                        if !expanding {
+                            divider(span: geo.size.width)
+                                .frame(width: handle)
+                        }
                         pane(right, primary: second, side: .trailing)
+                            .opacity(browser.splitExpandingID == left.id ? 0 : 1)
                     }
                 } else {
                     let first = max(0, geo.size.height * ratio - handle / 2)
                     let second = max(0, geo.size.height - first - handle)
                     VStack(spacing: 0) {
                         pane(left, primary: first, side: .top, verticalSpan: true)
-                        divider(span: geo.size.height)
-                            .frame(height: handle)
+                            .opacity(browser.splitExpandingID == right.id ? 0 : 1)
+                        if !expanding {
+                            divider(span: geo.size.height)
+                                .frame(height: handle)
+                        }
                         pane(right, primary: second, side: .bottom, verticalSpan: true)
+                            .opacity(browser.splitExpandingID == left.id ? 0 : 1)
                     }
                 }
             }
@@ -650,8 +684,9 @@ struct SplitStage: View {
         .animation(Motion.flight, value: browser.splitLeftID)
         .animation(Motion.flight, value: browser.splitRightID)
         .animation(Motion.flight, value: browser.splitAxis)
+        .animation(Motion.flight, value: browser.splitExpandingID)
         .animation(grabbingHandle ? nil : Motion.settle, value: browser.splitRatio)
-        .transition(.opacity.combined(with: .scale(scale: 0.985)))
+        .transition(.opacity)
     }
 
     private func pane(_ tab: Tab, primary: CGFloat, side: SplitEdge, verticalSpan: Bool = false) -> some View {
@@ -670,7 +705,7 @@ struct SplitStage: View {
                 .frame(height: 1)
         }
         .offset(x: horizontal ? lift : 0, y: horizontal ? 0 : lift)
-        .zIndex(swapping == tab.id ? 1 : 0)
+        .zIndex(swapping == tab.id || browser.splitExpandingID == tab.id ? 1 : 0)
         .contentShape(Rectangle())
         .onTapGesture { browser.select(tab) }
     }
@@ -698,12 +733,14 @@ struct SplitStage: View {
         .background(tab.id == browser.activeID ? Palette.wash.opacity(0.85) : Palette.ground.opacity(0.5))
         .contentShape(Rectangle())
         .onTapGesture { browser.select(tab) }
-        .gesture(swapDrag(for: tab, side: side, width: 180))
+        .gesture(swapDrag(for: tab, side: side, width: 220))
         .help("Hold and drag across the divider to swap")
     }
 
     private func divider(span: CGFloat) -> some View {
         ZStack {
+            // Invisible wide hit target; drawn hairline stays thin.
+            Color.clear
             if horizontal {
                 Rectangle().fill(Palette.hairline).frame(width: 1)
                 Capsule()
@@ -720,11 +757,7 @@ struct SplitStage: View {
         .contentShape(Rectangle())
         .onHover { over in
             hoveringHandle = over
-            if over {
-                (horizontal ? NSCursor.resizeLeftRight : NSCursor.resizeUpDown).push()
-            } else {
-                NSCursor.pop()
-            }
+            applyResizeCursor()
         }
         .gesture(
             DragGesture(minimumDistance: 1, coordinateSpace: .named("split-stage"))
@@ -732,15 +765,18 @@ struct SplitStage: View {
                     if ratioAtGrab == nil {
                         ratioAtGrab = browser.splitRatio
                         grabbingHandle = true
+                        applyResizeCursor()
                     }
                     let base = ratioAtGrab ?? 0.5
                     let delta = horizontal ? value.translation.width : value.translation.height
                     let next = base + delta / max(span, 1)
                     browser.splitRatio = min(max(next, Metrics.splitMin), 1 - Metrics.splitMin)
+                    applyResizeCursor()
                 }
                 .onEnded { _ in
                     ratioAtGrab = nil
                     grabbingHandle = false
+                    applyResizeCursor()
                 }
         )
         .modifier(OneClick(double: true) {
@@ -751,25 +787,39 @@ struct SplitStage: View {
         .help("Drag to resize · double-click to balance")
     }
 
+    private func applyResizeCursor() {
+        if hoveringHandle || grabbingHandle {
+            (horizontal ? NSCursor.resizeLeftRight : NSCursor.resizeUpDown).set()
+        } else {
+            NSCursor.arrow.set()
+        }
+    }
+
     private func swapDrag(for tab: Tab, side: SplitEdge, width: CGFloat) -> some Gesture {
-        DragGesture(minimumDistance: 16, coordinateSpace: .global)
+        DragGesture(minimumDistance: 28, coordinateSpace: .global)
             .onChanged { value in
                 if swapping == nil { swapping = tab.id }
                 let travel = horizontal ? value.translation.width : value.translation.height
                 swapTravel = travel
+                guard !swapCommitted else { return }
+                let threshold = width * Metrics.splitSwapCommit
                 let forward: Bool = {
                     switch side {
-                    case .leading, .top: return travel > width * 0.45
-                    case .trailing, .bottom: return travel < -width * 0.45
+                    case .leading, .top: return travel > threshold
+                    case .trailing, .bottom: return travel < -threshold
                     }
                 }()
                 if forward {
+                    swapCommitted = true
                     browser.swapSplit()
-                    swapping = nil
-                    swapTravel = 0
+                    withAnimation(Motion.settle) {
+                        swapping = nil
+                        swapTravel = 0
+                    }
                 }
             }
             .onEnded { _ in
+                swapCommitted = false
                 withAnimation(Motion.settle) {
                     swapping = nil
                     swapTravel = 0
@@ -812,29 +862,37 @@ struct SplitJointStrip: View {
         .animation(Motion.glide, value: browser.splitLeftID)
     }
 
+    /// Sidebar joint: linked rail + paired rows — no bare "Split" label.
     private var column: some View {
-        VStack(spacing: 2) {
-            HStack(spacing: 6) {
-                Image(systemName: "rectangle.split.1x2")
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(Palette.muted)
-                Text("Split")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(Palette.muted)
-                Spacer(minLength: 0)
-                Door(icon: "xmark", help: "End Split") {
-                    withAnimation(Motion.settle) { browser.endSplit() }
+        HStack(alignment: .center, spacing: 6) {
+            Capsule()
+                .fill(Palette.ink.opacity(0.22))
+                .frame(width: 3, height: 52)
+                .padding(.leading, 2)
+
+            VStack(spacing: 2) {
+                HStack(spacing: 4) {
+                    Image(systemName: "rectangle.split.1x2")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(Palette.muted)
+                        .help("Split view")
+                    Spacer(minLength: 0)
+                    Door(icon: "xmark", help: "End Split") {
+                        withAnimation(Motion.settle) { browser.endSplit() }
+                    }
                 }
+                .padding(.horizontal, 2)
+                memberRow(left, trailing: false)
+                memberRow(right, trailing: true)
             }
-            .padding(.horizontal, 4)
-            .padding(.top, 2)
-            memberRow(left, trailing: false)
-            memberRow(right, trailing: true)
         }
         .padding(.vertical, 4)
-        .padding(.horizontal, 2)
-        // Flat joint — wash only, no card stroke (Search chrome, not Zen).
-        .background(Palette.wash.opacity(0.4), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .padding(.trailing, 4)
+        .background(Palette.wash.opacity(0.45), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(Palette.hairline.opacity(0.7), lineWidth: 1)
+        )
     }
 
     @ViewBuilder
@@ -859,7 +917,7 @@ struct SplitJointStrip: View {
             .modifier(Carried(
                 index: trailing ? 1 : 0,
                 count: 2,
-                step: 30,
+                step: 36,
                 vertical: true,
                 space: "split-joint-side",
                 tabID: tab.id,

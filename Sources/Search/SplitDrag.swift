@@ -2,9 +2,12 @@ import SwiftUI
 import AppKit
 
 // Zen-like *interaction* for splitting: lift a tab into a mini-window, drag it
-// across the stage, snap to an edge, drop. Search chrome (Look wash, no orange
+// across the stage, snap to a side, drop. Search chrome (Look wash, no orange
 // floating cards). Carry state lives off Browser's @Published surface so the
 // tab strip does not redraw every pointer move (that was the flicker/overlap).
+//
+// Drop model: one dynamic half-stage zone from pointer side — never four tiny
+// always-on edge bands. Hysteresis around center so the zone does not thrash.
 
 /// Stage edge a lifted tab is over — drop opens/replaces that pane.
 enum SplitEdge: Equatable {
@@ -14,6 +17,15 @@ enum SplitEdge: Equatable {
         switch self {
         case .leading, .trailing: return true
         case .top, .bottom: return false
+        }
+    }
+
+    var alignment: Alignment {
+        switch self {
+        case .leading: return .leading
+        case .trailing: return .trailing
+        case .top: return .top
+        case .bottom: return .bottom
         }
     }
 }
@@ -31,7 +43,7 @@ final class SplitCarry: ObservableObject {
     /// Cursor in the stage overlay's local space (top-leading origin).
     @Published var point: CGPoint = .zero
     @Published var edge: SplitEdge?
-    /// Stage size for edge hit-testing (updated by the overlay).
+    /// Stage size for side hit-testing (updated by the overlay).
     var stageSize: CGSize = .zero
 
     private var lastEdge: SplitEdge?
@@ -65,42 +77,56 @@ final class SplitCarry: ObservableObject {
         point = .zero
     }
 
+    /// Pointer-side half: pick the dominant axis from center, keep one edge
+    /// with hysteresis so rearrange / hover near mid does not thrash.
     private func refreshEdge() {
         let size = stageSize
         guard size.width > 1, size.height > 1 else {
             edge = nil
             return
         }
-        let zone = Metrics.splitEdge
-        let x = point.x
-        let y = point.y
-        // Prefer the nearer edge when near a corner.
-        let distL = x
-        let distR = size.width - x
-        let distT = y
-        let distB = size.height - y
-        let nearest = min(distL, distR, distT, distB)
-        let next: SplitEdge?
-        if nearest > zone {
-            next = nil
-        } else if nearest == distL {
-            next = .leading
-        } else if nearest == distR {
-            next = .trailing
-        } else if nearest == distT {
-            next = .top
+        let nx = point.x / size.width
+        let ny = point.y / size.height
+        let dx = nx - 0.5
+        let dy = ny - 0.5
+        let dead = Metrics.splitHysteresis
+
+        let raw: SplitEdge = abs(dx) >= abs(dy)
+            ? (dx < 0 ? .leading : .trailing)
+            : (dy < 0 ? .top : .bottom)
+
+        let next: SplitEdge
+        if let current = lastEdge, current != raw {
+            // Stay on the current side until the pointer clearly commits past mid.
+            let committed: Bool = {
+                switch raw {
+                case .leading: return nx < 0.5 - dead
+                case .trailing: return nx > 0.5 + dead
+                case .top: return ny < 0.5 - dead
+                case .bottom: return ny > 0.5 + dead
+                }
+            }()
+            // Also require the new side's axis to dominate (avoids corner flicker).
+            let axisClear: Bool = {
+                switch raw {
+                case .leading, .trailing: return abs(dx) > abs(dy) + dead * 0.5
+                case .top, .bottom: return abs(dy) > abs(dx) + dead * 0.5
+                }
+            }()
+            next = (committed && axisClear) ? raw : current
         } else {
-            next = .bottom
+            next = raw
         }
+
         if next != lastEdge {
-            if next != nil { Haptics.level() }
+            Haptics.level()
             lastEdge = next
         }
         edge = next
     }
 }
 
-/// Four-edge drop zones + mini-window while a tab is lifted.
+/// One dynamic half-stage drop zone + mini-window while a tab is lifted.
 struct SplitDragOverlay: View {
     @ObservedObject var browser: Browser
     @ObservedObject var carry: SplitCarry
@@ -109,8 +135,9 @@ struct SplitDragOverlay: View {
         GeometryReader { geo in
             let size = geo.size
             ZStack {
-                if carry.tabID != nil {
-                    edgeBands(size: size)
+                if carry.lifted, let edge = carry.edge {
+                    halfZone(edge: edge, size: size)
+                        .transition(.opacity)
                 }
                 if carry.lifted, let id = carry.tabID, let tab = browser.find(id) {
                     SplitMiniWindow(tab: tab, edge: carry.edge)
@@ -129,36 +156,20 @@ struct SplitDragOverlay: View {
         .allowsHitTesting(false)
     }
 
-    private func edgeBands(size: CGSize) -> some View {
-        let zone = Metrics.splitEdge
-        return ZStack {
-            band(active: carry.edge == .leading)
-                .frame(width: zone, height: size.height)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-            band(active: carry.edge == .trailing)
-                .frame(width: zone, height: size.height)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
-            band(active: carry.edge == .top)
-                .frame(width: size.width, height: zone)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            band(active: carry.edge == .bottom)
-                .frame(width: size.width, height: zone)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-        }
-        .opacity(carry.lifted ? 1 : 0.35)
-    }
-
-    private func band(active: Bool) -> some View {
-        RoundedRectangle(cornerRadius: 12, style: .continuous)
-            .fill(Palette.ink.opacity(active ? 0.12 : 0.04))
-            .padding(5)
-            .overlay {
-                if active {
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .strokeBorder(Palette.ink.opacity(0.18), lineWidth: 1)
-                        .padding(5)
-                }
-            }
+    /// ~50% of the stage on the active side — Zen half, Search wash (not four bands).
+    private func halfZone(edge: SplitEdge, size: CGSize) -> some View {
+        let inset: CGFloat = 8
+        let w = edge.isHorizontal ? size.width * 0.5 - inset * 1.5 : size.width - inset * 2
+        let h = edge.isHorizontal ? size.height - inset * 2 : size.height * 0.5 - inset * 1.5
+        return RoundedRectangle(cornerRadius: 14, style: .continuous)
+            .fill(Palette.ink.opacity(0.10))
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .strokeBorder(Palette.ink.opacity(0.20), lineWidth: 1)
+            )
+            .frame(width: max(0, w), height: max(0, h))
+            .padding(inset)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: edge.alignment)
     }
 }
 
