@@ -237,7 +237,7 @@ final class Bench {
             answer([
                 "tabs": browser.tabs.map(describe),
                 "essentials": browser.essentials.map(describe),
-                "pins": browser.tabs.filter { $0.pin != nil }.map(describe),
+                "pins": browser.tabs.filter { $0.pin != nil && !$0.essential }.map(describe),
             ])
 
         case "pin":
@@ -1450,6 +1450,7 @@ final class Bench {
             "noisy": tab.noisy,
             "muted": tab.muted,
             "pin": tab.pin ?? "",
+            "pinURL": tab.pinURL?.absoluteString ?? "",
             "essential": tab.essential,
             "extensions": { if #available(macOS 15.4, *) { return tab.carriesExtensions } else { return false } }(),
         ]

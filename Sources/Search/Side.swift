@@ -1,11 +1,12 @@
+import AppKit
 import SwiftUI
 
 /// The tabs, down the left instead of across the top.
 ///
-/// The same pieces as the strip — the grey that slides to the tab you picked,
-/// the pinned squares, the cross that appears under the pointer — laid out the
-/// other way. The traffic lights keep their corner; the column starts under
-/// them and the page takes the whole height beside it.
+/// Zen strip: Essentials as small icon squares (all spaces), Pinned as title
+/// rows (this space only), then loose tabs — with a hairline under Essentials
+/// and under the pin block. The traffic lights keep their corner; the column
+/// starts under them and the page takes the whole height beside it.
 struct SideBar: View {
     @ObservedObject var browser: Browser
     @ObservedObject var prefs: Preferences
@@ -17,21 +18,34 @@ struct SideBar: View {
     @State private var grabbed: CGFloat?
     @State private var onEdge = false
 
-    /// A pin, picked up out of the grid — a separate state from the loose
-    /// rows above, since the two gestures never happen at once but move on
-    /// two different axes.
     /// The neighbouring spaces' own grey, apart from this one's.
     @Namespace private var before
     @Namespace private var after
+    /// Morph id shared by an essential square and a pin/loose row of the same
+    /// tab while it crosses the essentials boundary.
+    @Namespace private var morph
 
+    /// A tab picked up in the sidebar — essentials grid, pin rows, or loose.
     @State private var pinDragging: Tab.ID?
     @State private var pinFrom = 0
     @State private var pinTravel: CGSize = .zero
+    /// Where a cross-zone drag would land (insertion highlight).
+    @State private var dropHint: DropHint?
+    @State private var hapticZone: SideZone?
 
     private static let row: CGFloat = 28
     private static let gap: CGFloat = 2
     private static let square: CGFloat = 34
     private static let pinGap: CGFloat = 4
+
+    private enum SideZone: Equatable {
+        case essentials, pinned, loose
+    }
+
+    private struct DropHint: Equatable {
+        var zone: SideZone
+        var index: Int
+    }
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -72,7 +86,7 @@ struct SideBar: View {
                 // ghost favicons / empty pin slots after coming back.
                 if !browser.essentials.isEmpty {
                     essentialsBlock
-                        .padding(.bottom, browser.spacePins > 0 ? SideBar.pinGap : 10)
+                        .padding(.bottom, 8)
                 }
 
                 // The spaces side by side, as pages: two fingers sideways move
@@ -88,6 +102,8 @@ struct SideBar: View {
             .onChange(of: browser.spaceID) { _, _ in
                 pinDragging = nil
                 pinTravel = .zero
+                dropHint = nil
+                hapticZone = nil
             }
 
             VStack {
@@ -202,7 +218,7 @@ struct SideBar: View {
                     // Space pins only — essentials sit above the swipe.
                     if browser.spacePins > 0 {
                         pinned
-                            .padding(.bottom, 10)
+                            .padding(.bottom, 8)
                             .id(browser.spaceID)
                     }
                     // A row too long for the window scrolls between the pins
@@ -252,20 +268,27 @@ struct SideBar: View {
     private func preview(_ row: Parked, pill: Namespace.ID) -> some View {
         let pins = row.tabs.filter { $0.pin != nil && !$0.essential }
         let rest = row.tabs.filter { $0.pin == nil && !$0.essential }
-        let cols = SideBar.pinColumns(pins.count)
-        let width = pinWidth(for: pins.count)
-        let height = min(SideBar.square, width)
         return VStack(alignment: .leading, spacing: 0) {
             if !pins.isEmpty {
-                VStack(spacing: 0) {
-                    PinGrid(columns: cols, width: width, height: height, spacing: SideBar.pinGap) {
-                        ForEach(pins) { tab in
-                            PinSquare(browser: browser, prefs: prefs, tab: tab, live: tab.id == row.active,
-                                      pill: pill, width: width, height: height)
-                        }
+                VStack(spacing: SideBar.gap) {
+                    ForEach(pins) { tab in
+                        SideRow(
+                            browser: browser,
+                            prefs: prefs,
+                            tab: tab,
+                            live: tab.id == row.active,
+                            pill: pill,
+                            close: {},
+                            geometry: "live-pin-row"
+                        )
                     }
                 }
-                .padding(.bottom, 10)
+                .padding(.bottom, 8)
+                Rectangle()
+                    .fill(Palette.hairline)
+                    .frame(height: 1)
+                    .padding(.horizontal, 4)
+                    .padding(.bottom, 8)
             }
             VStack(spacing: SideBar.gap) {
                 ForEach(rest) { tab in
@@ -283,19 +306,26 @@ struct SideBar: View {
     private var rowsEnd: CGFloat {
         let essentials = browser.essentials.count
         let spacePins = browser.spacePins
-        let essentialBlock = pinBlockHeight(count: essentials, bottomPad: spacePins > 0 ? SideBar.pinGap : 10)
-        let spacePinBlock = pinBlockHeight(count: spacePins, bottomPad: 10)
+        // Essentials: labelled square grid. Pins: labelled rows + separator.
+        let essentialBlock = essentialsGridHeight(count: essentials, bottomPad: 10)
+        let spacePinBlock: CGFloat = {
+            guard spacePins > 0 else { return 0 }
+            let label: CGFloat = browser.essentials.isEmpty ? 0 : 18
+            let rows = CGFloat(spacePins) * (SideBar.row + SideBar.gap)
+            return label + rows + 8 + 1 + 8 // rows + separator + pad
+        }()
         let loose = CGFloat(visibleLooseCount + browser.folders.count) * (SideBar.row + SideBar.gap)
         return Metrics.strip + essentialBlock + spacePinBlock + loose + SideBar.row + 8
     }
 
-    private func pinBlockHeight(count: Int, bottomPad: CGFloat) -> CGFloat {
+    private func essentialsGridHeight(count: Int, bottomPad: CGFloat) -> CGFloat {
         guard count > 0 else { return 0 }
         let cols = SideBar.pinColumns(count)
         let rows = (count + cols - 1) / cols
         let cell = pinWidth(for: count)
         let height = min(SideBar.square, cell)
-        return CGFloat(rows) * height + CGFloat(max(0, rows - 1)) * SideBar.pinGap + bottomPad
+        let label: CGFloat = 18
+        return label + CGFloat(rows) * height + CGFloat(max(0, rows - 1)) * SideBar.pinGap + bottomPad
     }
 
     private var visibleLooseCount: Int {
@@ -305,17 +335,14 @@ struct SideBar: View {
         }.count
     }
 
-    // MARK: - the pinned squares
+    // MARK: - essentials squares + pinned rows
 
     /// This space's pins only. Essentials have their own strip above the swipe.
     private var pinnedTabs: [Tab] { browser.tabs.filter { $0.pin != nil && !$0.essential } }
     private var looseTabs: [Tab] { browser.tabs.filter { $0.pin == nil && !$0.essential } }
 
-    /// Three columns is the block's own shape — up to six pins, that's two
-    /// full rows, and one or two is just those same three places with a
-    /// couple of them empty rather than a lonely row of its own width. Only
-    /// past six does the block widen, one column at a time, to stay at two
-    /// rows for as long as that's a reasonable shape at all.
+    /// Essentials stay a square grid: three columns is the block's own shape —
+    /// up to six essentials, two full rows; past six the block widens.
     private static func pinColumns(_ count: Int) -> Int {
         max(3, (count + 1) / 2)
     }
@@ -342,7 +369,8 @@ struct SideBar: View {
         min(SideBar.square, pinWidth)
     }
 
-    /// Profile-wide essentials: labelled, always on, above this space's pins.
+    /// Profile-wide essentials: labelled icon squares, always on, above this
+    /// space's pin rows. A hairline sits under the block (Zen chrome).
     private var essentialsBlock: some View {
         let tabs = browser.essentials
         let cols = SideBar.pinColumns(tabs.count)
@@ -353,35 +381,45 @@ struct SideBar: View {
                 .font(.system(size: 10, weight: .semibold))
                 .foregroundStyle(Palette.muted)
                 .padding(.leading, 2)
-            PinGrid(columns: cols, width: width, height: height, spacing: SideBar.pinGap) {
-                ForEach(Array(tabs.enumerated()), id: \.element.id) { index, tab in
-                    let held = pinDragging == tab.id
-                    PinSquare(
-                        browser: browser,
-                        prefs: prefs,
-                        tab: tab,
-                        live: tab.id == browser.activeID,
-                        pill: pill,
-                        width: width,
-                        height: height
-                    )
-                    .offset(pinOffset(held: held, index: index, columns: cols, width: width, height: height))
-                    .transaction { if held { $0.animation = nil } }
-                    .zIndex(held ? 1 : 0)
-                    .shadow(color: .black.opacity(held ? 0.16 : 0), radius: 10, y: 3)
-                    .gesture(pinReorder(
-                        tab: tab,
-                        index: index,
-                        columns: cols,
-                        width: width,
-                        height: height,
-                        count: tabs.count,
-                        space: "essentials"
-                    ))
-                    .help(essentialsHelp)
+            ZStack(alignment: .topLeading) {
+                PinGrid(columns: cols, width: width, height: height, spacing: SideBar.pinGap) {
+                    ForEach(Array(tabs.enumerated()), id: \.element.id) { index, tab in
+                        let held = pinDragging == tab.id
+                        PinSquare(
+                            browser: browser,
+                            prefs: prefs,
+                            tab: tab,
+                            live: tab.id == browser.activeID,
+                            pill: pill,
+                            morph: morph,
+                            width: width,
+                            height: height
+                        )
+                        .offset(pinOffset(held: held, index: index, columns: cols, width: width, height: height))
+                        .transaction { if held { $0.animation = nil } }
+                        .zIndex(held ? 1 : 0)
+                        .shadow(color: .black.opacity(held ? 0.16 : 0), radius: 10, y: 3)
+                        .gesture(essentialDrag(
+                            tab: tab,
+                            index: index,
+                            columns: cols,
+                            width: width,
+                            height: height,
+                            count: tabs.count
+                        ))
+                        .help(essentialsHelp)
+                    }
+                }
+                if let hint = dropHint, hint.zone == .essentials {
+                    insertMark(at: hint.index, in: .essentials, columns: cols, width: width, height: height)
                 }
             }
             .coordinateSpace(name: "essentials")
+            Rectangle()
+                .fill(Palette.hairline)
+                .frame(height: 1)
+                .padding(.horizontal, 4)
+                .padding(.top, 6)
         }
     }
 
@@ -392,55 +430,93 @@ struct SideBar: View {
         return "Essential — stays in every space"
     }
 
-    /// This space's pin grid: fixed-size cells, left-aligned, so a half-empty
-    /// last row holds its ground rather than stretching to fill it.
+    /// This space's pins as Zen-style title rows (not an icon grid). A hairline
+    /// under the block separates pins from loose tabs — the #14 overlay bug
+    /// does not apply: pins no longer share PinSquare geometry with anything.
     private var pinned: some View {
         let tabs = pinnedTabs
-        let cols = SideBar.pinColumns(tabs.count)
-        let width = pinWidth
-        let height = pinHeight
-        // Measured in the grid's own space, not the square's: a square that
-        // has just been moved to a new cell would otherwise report the drag
-        // from where it now is, the target would jump back, and the square
-        // would shuttle between two cells for as long as the finger stayed.
+        let step = SideBar.row + SideBar.gap
         return VStack(alignment: .leading, spacing: 4) {
-            if !browser.essentials.isEmpty {
-                Text("Pinned")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(Palette.muted)
-                    .padding(.leading, 2)
-            }
-            PinGrid(columns: cols, width: width, height: height, spacing: SideBar.pinGap) {
-                ForEach(Array(tabs.enumerated()), id: \.element.id) { index, tab in
-                    let held = pinDragging == tab.id
-                    PinSquare(
-                        browser: browser,
-                        prefs: prefs,
-                        tab: tab,
-                        live: tab.id == browser.activeID,
-                        pill: pill,
-                        width: width,
-                        height: height
-                    )
-                    .offset(pinOffset(held: held, index: index, columns: cols, width: width, height: height))
-                    // Under the hand exactly, as a row is (see the rows below).
-                    .transaction { if held { $0.animation = nil } }
-                    .zIndex(held ? 1 : 0)
-                    .shadow(color: .black.opacity(held ? 0.16 : 0), radius: 10, y: 3)
-                    .gesture(pinReorder(
-                        tab: tab,
-                        index: index,
-                        columns: cols,
-                        width: width,
-                        height: height,
-                        count: tabs.count,
-                        space: "pins"
-                    ))
-                    .help("Pinned to this space")
+            Text("Pinned")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(Palette.muted)
+                .padding(.leading, 2)
+            ZStack(alignment: .topLeading) {
+                VStack(spacing: SideBar.gap) {
+                    ForEach(Array(tabs.enumerated()), id: \.element.id) { index, tab in
+                        let held = pinDragging == tab.id
+                        SideRow(
+                            browser: browser,
+                            prefs: prefs,
+                            tab: tab,
+                            live: tab.id == browser.activeID,
+                            pill: pill,
+                            close: { browser.close(tab) },
+                            geometry: "live-pin-row",
+                            morph: morph
+                        )
+                        .offset(y: held ? pinTravel.height - CGFloat(index - pinFrom) * step : 0)
+                        .transaction { if held { $0.animation = nil } }
+                        .zIndex(held ? 1 : 0)
+                        .shadow(color: .black.opacity(held ? 0.14 : 0), radius: 12, y: 4)
+                        .gesture(pinnedRowDrag(tab: tab, index: index, step: step, count: tabs.count))
+                        .help("Pinned to this space")
+                    }
+                }
+                if let hint = dropHint, hint.zone == .pinned {
+                    insertMark(at: hint.index, in: .pinned, columns: 1, width: 0, height: step)
                 }
             }
+            .coordinateSpace(name: "pins")
+            Rectangle()
+                .fill(Palette.hairline)
+                .frame(height: 1)
+                .padding(.horizontal, 4)
+                .padding(.top, 6)
         }
-        .coordinateSpace(name: "pins")
+    }
+
+    /// Thin bar where a dragged tab will insert.
+    @ViewBuilder
+    private func insertMark(
+        at index: Int,
+        in zone: SideZone,
+        columns: Int,
+        width: CGFloat,
+        height: CGFloat
+    ) -> some View {
+        let bar = RoundedRectangle(cornerRadius: 1, style: .continuous)
+            .fill(Palette.ink.opacity(0.45))
+            .frame(height: 2)
+        switch zone {
+        case .essentials:
+            let col = index % max(columns, 1)
+            let row = index / max(columns, 1)
+            bar
+                .frame(width: max(12, width * 0.7))
+                .offset(
+                    x: CGFloat(col) * (width + SideBar.pinGap) + width * 0.15,
+                    y: CGFloat(row) * (height + SideBar.pinGap) - 1
+                )
+                .allowsHitTesting(false)
+        case .pinned, .loose:
+            bar
+                .frame(maxWidth: .infinity)
+                .padding(.horizontal, 6)
+                .offset(y: CGFloat(index) * height - 1)
+                .allowsHitTesting(false)
+        }
+    }
+
+    private func bumpHaptic(_ zone: SideZone?) {
+        guard zone != hapticZone else { return }
+        let first = hapticZone == nil && zone != nil
+        let crossed = hapticZone != nil && zone != nil && zone != hapticZone
+        hapticZone = zone
+        guard first || crossed else { return }
+        NSHapticFeedbackManager.defaultPerformer.perform(
+            crossed ? .levelChange : .alignment, performanceTime: .now
+        )
     }
 
     /// The one square actually held stays glued to the fingers; every other
@@ -460,11 +536,6 @@ struct SideBar: View {
         )
     }
 
-    /// How many cells the drag has moved, in the grid's own row-major order
-    /// — a straight line through the array a column-major offset would get
-    /// wrong the moment it crossed a row. Row and column travel each measure
-    /// themselves against that axis's own step now that a cell's width and
-    /// height aren't the same number.
     private func pinDelta(columns: Int, stepX: CGFloat, stepY: CGFloat) -> Int {
         let col = Int((pinTravel.width / stepX).rounded())
         let row = Int((pinTravel.height / stepY).rounded())
@@ -475,50 +546,184 @@ struct SideBar: View {
         min(max(0, from + moved), max(0, count - 1))
     }
 
-    /// Pick a square up and the others make way — across a row, and down
-    /// into the next, exactly as far as the fingers actually moved.
-    private func pinReorder(
+    /// Essentials grid: reorder among squares; drag past the bottom edge to
+    /// demote into Pinned (row) or further into loose.
+    private func essentialDrag(
         tab: Tab,
         index: Int,
         columns: Int,
         width: CGFloat,
         height: CGFloat,
-        count: Int,
-        space: String
+        count: Int
     ) -> some Gesture {
-        DragGesture(minimumDistance: 5, coordinateSpace: .named(space))
+        let blockH = {
+            let rows = (count + columns - 1) / columns
+            return CGFloat(rows) * height + CGFloat(max(0, rows - 1)) * SideBar.pinGap
+        }()
+        return DragGesture(minimumDistance: 5, coordinateSpace: .named("essentials"))
             .onChanged { value in
                 if pinDragging != tab.id {
                     pinDragging = tab.id
                     pinFrom = index
+                    bumpHaptic(.essentials)
                 }
                 pinTravel = value.translation
                 let stepX = width + SideBar.pinGap
                 let stepY = height + SideBar.pinGap
-                let target = pinTarget(from: pinFrom, moved: pinDelta(columns: columns, stepX: stepX, stepY: stepY), count: count)
+                // Past the bottom of the essentials block → leave essentials.
+                if value.location.y > blockH + 12 {
+                    let intoPins = value.location.y < blockH + 12 + CGFloat(max(1, browser.spacePins)) * (SideBar.row + SideBar.gap) + 40
+                    if intoPins || browser.spacePins > 0 {
+                        let idx = max(0, Int(((value.location.y - blockH - 12) / (SideBar.row + SideBar.gap)).rounded()))
+                        dropHint = DropHint(zone: .pinned, index: min(idx, browser.spacePins))
+                        bumpHaptic(.pinned)
+                    } else {
+                        dropHint = DropHint(zone: .loose, index: 0)
+                        bumpHaptic(.loose)
+                    }
+                    return
+                }
+                dropHint = DropHint(zone: .essentials, index: pinTarget(
+                    from: pinFrom,
+                    moved: pinDelta(columns: columns, stepX: stepX, stepY: stepY),
+                    count: count
+                ))
+                bumpHaptic(.essentials)
+                let target = dropHint!.index
                 if target != index {
                     withAnimation(Motion.settle) {
-                        // Essentials and space pins are separate grids now —
-                        // pass an index inside that grid, not a combined one.
-                        if tab.essential {
-                            browser.movePin(tab, to: target)
-                        } else {
-                            browser.move(tab, to: target)
-                        }
+                        browser.movePin(tab, to: target)
+                    }
+                }
+            }
+            .onEnded { value in
+                let hint = dropHint
+                withAnimation(Motion.settle) {
+                    if let hint, hint.zone == .pinned {
+                        browser.removeEssential(tab)
+                        // removeEssential attaches as pin at 0; move to hint.
+                        browser.move(tab, to: min(hint.index, max(0, browser.spacePins - 1)))
+                    } else if let hint, hint.zone == .loose {
+                        browser.unpin(tab)
+                    }
+                    pinDragging = nil
+                    pinTravel = .zero
+                    dropHint = nil
+                    hapticZone = nil
+                }
+            }
+    }
+
+    /// Pin rows: reorder vertically; drag up into Essentials to morph into a
+    /// square; drag down past the separator to unpin into loose.
+    private func pinnedRowDrag(tab: Tab, index: Int, step: CGFloat, count: Int) -> some Gesture {
+        DragGesture(minimumDistance: 5, coordinateSpace: .named("pins"))
+            .onChanged { value in
+                if pinDragging != tab.id {
+                    pinDragging = tab.id
+                    pinFrom = index
+                    bumpHaptic(.pinned)
+                }
+                pinTravel = CGSize(width: 0, height: value.translation.height)
+                // Up past the top → essentials.
+                if value.location.y < -10 {
+                    let idx = min(browser.essentials.count, max(0, Int((value.location.x / 40).rounded())))
+                    dropHint = DropHint(zone: .essentials, index: idx)
+                    bumpHaptic(.essentials)
+                    return
+                }
+                // Below the pin block → loose.
+                if value.location.y > CGFloat(count) * step + 8 {
+                    dropHint = DropHint(zone: .loose, index: 0)
+                    bumpHaptic(.loose)
+                    return
+                }
+                let target = pinTarget(from: pinFrom, moved: Int((value.translation.height / step).rounded()), count: count)
+                dropHint = DropHint(zone: .pinned, index: target)
+                bumpHaptic(.pinned)
+                if target != index {
+                    withAnimation(Motion.settle) {
+                        browser.move(tab, to: target)
                     }
                 }
             }
             .onEnded { _ in
+                let hint = dropHint
                 withAnimation(Motion.settle) {
+                    if let hint, hint.zone == .essentials {
+                        browser.makeEssential(tab)
+                        browser.movePin(tab, to: hint.index)
+                    } else if let hint, hint.zone == .loose {
+                        browser.unpin(tab)
+                    }
                     pinDragging = nil
                     pinTravel = .zero
+                    dropHint = nil
+                    hapticZone = nil
                 }
             }
     }
 
     // MARK: - the rows
 
+    /// Loose rows: reorder among themselves; drag above the list into Pinned
+    /// or Essentials (morph to square).
+    private func looseDrag(tab: Tab, index: Int, step: CGFloat, count: Int) -> some Gesture {
+        DragGesture(minimumDistance: 5, coordinateSpace: .named("rows"))
+            .onChanged { value in
+                if pinDragging != tab.id {
+                    pinDragging = tab.id
+                    pinFrom = index
+                    bumpHaptic(.loose)
+                }
+                pinTravel = CGSize(width: 0, height: value.translation.height)
+                // Above the loose list → pinned, or further → essentials.
+                if value.location.y < -8 {
+                    if value.location.y < -8 - CGFloat(max(1, browser.spacePins)) * step - 20 {
+                        dropHint = DropHint(zone: .essentials, index: browser.essentials.count)
+                        bumpHaptic(.essentials)
+                    } else {
+                        let idx = max(0, browser.spacePins + Int((value.location.y / step).rounded()))
+                        dropHint = DropHint(zone: .pinned, index: min(max(0, idx), browser.spacePins))
+                        bumpHaptic(.pinned)
+                    }
+                    return
+                }
+                let moved = Int((value.translation.height / step).rounded())
+                let target = min(max(0, pinFrom + moved), max(0, count - 1))
+                dropHint = DropHint(zone: .loose, index: target)
+                bumpHaptic(.loose)
+                if target != index, loosePieces.indices.contains(target) {
+                    withAnimation(Motion.settle) {
+                        if case .folder(let folder, _) = loosePieces[target] {
+                            browser.place(tab, in: folder)
+                        } else if let dest = loosePieces[target].tab,
+                                  let at = browser.tabs.firstIndex(where: { $0.id == dest.id }) {
+                            browser.move(tab, to: at)
+                        }
+                    }
+                }
+            }
+            .onEnded { _ in
+                let hint = dropHint
+                withAnimation(Motion.settle) {
+                    if let hint, hint.zone == .essentials {
+                        browser.makeEssential(tab)
+                        browser.movePin(tab, to: hint.index)
+                    } else if let hint, hint.zone == .pinned {
+                        browser.pin(tab)
+                        browser.move(tab, to: min(hint.index, max(0, browser.spacePins - 1)))
+                    }
+                    pinDragging = nil
+                    pinTravel = .zero
+                    dropHint = nil
+                    hapticZone = nil
+                }
+            }
+    }
+
     private var loose: some View {
+        ZStack(alignment: .topLeading) {
         VStack(spacing: SideBar.gap) {
             ForEach(Array(loosePieces.enumerated()), id: \.element.id) { index, piece in
                 switch piece {
@@ -531,32 +736,34 @@ struct SideBar: View {
                     }
                 case .loose(let tab), .pin(let tab):
                     let step = SideBar.row + SideBar.gap
+                    let held = pinDragging == tab.id
                     SideRow(
                         browser: browser,
                         prefs: prefs,
                         tab: tab,
                         live: tab.id == browser.activeID,
                         pill: pill,
-                        close: { browser.close(tab) }
+                        close: { browser.close(tab) },
+                        morph: morph
                     )
-                    .modifier(Carried(index: index, count: loosePieces.count, step: step, vertical: true, space: "rows") { target in
-                        guard loosePieces.indices.contains(target) else { return }
-                        if case .folder(let folder, _) = loosePieces[target] {
-                            browser.place(tab, in: folder)
-                        } else if let dest = loosePieces[target].tab,
-                                  let at = browser.tabs.firstIndex(where: { $0.id == dest.id }) {
-                            browser.move(tab, to: at)
-                        }
-                    })
+                    .offset(y: held ? pinTravel.height - CGFloat(index - pinFrom) * step : 0)
+                    .transaction { if held { $0.animation = nil } }
+                    .zIndex(held ? 1 : 0)
+                    .shadow(color: .black.opacity(held ? 0.14 : 0), radius: 12, y: 4)
+                    .gesture(looseDrag(tab: tab, index: index, step: step, count: loosePieces.count))
                 case .essential:
                     EmptyView()
                 }
             }
         }
+        if let hint = dropHint, hint.zone == .loose {
+            insertMark(at: hint.index, in: .loose, columns: 1, width: 0, height: SideBar.row + SideBar.gap)
+        }
+        }
         .coordinateSpace(name: "rows")
     }
 
-    /// Folder headers and visible loose tabs for the column (pins stay in the grid).
+    /// Folder headers and visible loose tabs for the column (pins stay above).
     private var loosePieces: [StripPiece] {
         browser.spaceShownPieces.filter {
             switch $0 {
@@ -603,7 +810,7 @@ struct SideBar: View {
 
 }
 
-/// The pinned squares' grid, every cell laid out at once. A lazy grid makes
+/// Essentials' square grid, every cell laid out at once. A lazy grid makes
 /// its cells only once the column is on screen, where the column's slide
 /// can't take them along: folded with ⌘S and brought back, the squares stood
 /// in place while the column came in beneath them. A dozen squares need no
@@ -644,6 +851,7 @@ private struct PinSquare: View {
     @ObservedObject var tab: Tab
     let live: Bool
     let pill: Namespace.ID
+    var morph: Namespace.ID?
     var width: CGFloat = 34
     var height: CGFloat = 34
 
@@ -672,10 +880,9 @@ private struct PinSquare: View {
             if live {
                 RoundedRectangle(cornerRadius: scale * 9 / 34, style: .continuous)
                     .fill(Palette.wash)
-                    // Separate from loose rows: morphing "live" between a pin
-                    // square and a title row across a space swap left ghost
-                    // favicons overlapping the list after restore.
-                    .matchedGeometryEffect(id: "live-pin", in: pill)
+                    // Essentials only: never share "live" with pin/loose rows
+                    // (#14 ghost favicons after a space swap).
+                    .matchedGeometryEffect(id: "live-essential", in: pill)
             } else {
                 RoundedRectangle(cornerRadius: scale * 9 / 34, style: .continuous)
                     .fill(hovering ? Palette.hover : Palette.wash.opacity(0.55))
@@ -691,7 +898,24 @@ private struct PinSquare: View {
         .contextMenu { TabMenu(browser: browser, tab: tab, close: { browser.close(tab) }) }
         .help(tab.label)
         .animation(Motion.quick, value: hovering)
+        // Morph into / out of the square when crossing the essentials boundary.
+        .modifier(MorphLink(id: tab.id, namespace: morph))
         .transition(.scale(scale: 0.8).combined(with: .opacity))
+    }
+}
+
+/// Optional matched-geometry link so a row can morph into an essential square.
+private struct MorphLink: ViewModifier {
+    let id: Tab.ID
+    let namespace: Namespace.ID?
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if let namespace {
+            content.matchedGeometryEffect(id: id, in: namespace)
+        } else {
+            content
+        }
     }
 }
 
@@ -703,6 +927,10 @@ private struct SideRow: View {
     let live: Bool
     let pill: Namespace.ID
     let close: () -> Void
+    /// Matched-geometry id for the live wash — pin rows use `live-pin-row`
+    /// so a space-swap never morphs a pin into a loose row (#14).
+    var geometry: String = "live-row"
+    var morph: Namespace.ID?
 
     @State private var hovering = false
     @State private var shake: CGFloat = 0
@@ -819,6 +1047,7 @@ private struct SideRow: View {
             shake = 0
             withAnimation(.easeOut(duration: 0.5)) { shake = 1 }
         }
+        .modifier(MorphLink(id: tab.id, namespace: morph))
         .transition(.scale(scale: 0.94, anchor: .leading).combined(with: .opacity))
     }
 
@@ -837,7 +1066,7 @@ private struct SideRow: View {
                 }
             }
             .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
-            .matchedGeometryEffect(id: "live-row", in: pill)
+            .matchedGeometryEffect(id: geometry, in: pill)
         } else if hovering {
             RoundedRectangle(cornerRadius: 9, style: .continuous)
                 .fill(Palette.hover)

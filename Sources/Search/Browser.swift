@@ -590,6 +590,7 @@ final class Browser: NSObject, ObservableObject {
         tab.folderID = nil
         if tab.pin == nil {
             tab.pin = tab.monogram
+            rememberPin(tab)
             // Pinned tabs live at the head of the row, in the order they were
             // pinned, so their letters never move under your hand.
             if !tab.essential, let here = tabs.firstIndex(where: { $0.id == tab.id }) {
@@ -601,6 +602,8 @@ final class Browser: NSObject, ObservableObject {
                     )
                 }
             }
+        } else {
+            rememberPin(tab)
         }
         // Pin lives on Tab; the sidebar filters pins from Browser. Always
         // republish and re-order so a pin never stays drawn as a loose row
@@ -641,6 +644,7 @@ final class Browser: NSObject, ObservableObject {
         }
         if editingPin == tab.id { editingPin = nil }
         tab.pin = nil
+        tab.pinURL = nil
         defer { writeSession(now: true) }
         // Back out of the pinned block, to the head of the loose tabs.
         if let here = tabs.firstIndex(where: { $0.id == tab.id }) {

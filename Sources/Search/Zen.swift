@@ -6,10 +6,12 @@ import SwiftUI
 // session only — do not re-write essentials onto every space).
 //
 // Two verbs, not a gradient:
-// - **Pin** — per-space only; lives in that space's pin grid / strip.
-// - **Essential** — profile-wide; sticky above space pins in the sidebar and
-//   beside the top-bar swipe (TabBar).
-// Pin does not "promote toward" Essential.
+// - **Pin** — per-space only; lives as a **row** under Essentials (Zen-style),
+//   not an icon grid. Separated from loose tabs by a hairline.
+// - **Essential** — profile-wide; sticky **icon squares** above space pins in
+//   the sidebar and beside the top-bar swipe (TabBar).
+// Pin does not "promote toward" Essential. Dragging into Essentials morphs a
+// row into a square; dragging out morphs back.
 //
 // Scope (Zen-aligned):
 // - Essentials are **profile-wide**, not space-owned. Switching spaces must
@@ -120,6 +122,7 @@ extension Browser {
             title: tab.title,
             pin: tab.pin,
             name: tab.name,
+            pinURL: tab.pinURL?.absoluteString,
             folder: tab.folderID?.uuidString,
             collapsed: collapsed
         )
@@ -127,6 +130,7 @@ extension Browser {
 
     func apply(_ entry: Session.Entry, to tab: Tab) {
         tab.pin = entry.pin
+        tab.pinURL = entry.pinURL.flatMap(URL.init(string:))
         tab.folderID = entry.folder.flatMap(UUID.init(uuidString:))
     }
 
@@ -265,6 +269,7 @@ extension Browser {
 
     func makeEssential(_ tab: Tab) {
         if tab.pin == nil { pin(tab) }
+        rememberPin(tab)
         tab.folderID = nil
         tab.essential = true
         detach(tab)
@@ -279,8 +284,81 @@ extension Browser {
     func removeEssential(_ tab: Tab) {
         tab.essential = false
         essentials.removeAll { $0.id == tab.id }
+        // Back as a space pin (still pinned), at the head of this space's pins.
         attach(tab, at: 0)
+        scrubSpaceRow()
         writeSession(now: true)
+    }
+
+    // MARK: - pin URL / move to space
+
+    /// Remember the address at first pin / essential, once.
+    func rememberPin(_ tab: Tab) {
+        if tab.pinURL == nil { tab.pinURL = tab.pending ?? tab.address }
+    }
+
+    /// Right-click › Replace URL with Current Page — pin home becomes here.
+    func replacePinURL(_ tab: Tab) {
+        guard let url = tab.pending ?? tab.address else {
+            announce("Nothing to replace with")
+            return
+        }
+        tab.pinURL = url
+        writeSession(now: true)
+        announce("Pin URL replaced")
+    }
+
+    /// Navigate back to the address remembered when the pin was made.
+    func resetPin(_ tab: Tab) {
+        guard let url = tab.pinURL else {
+            announce("No pin to reset")
+            return
+        }
+        tab.go(to: url)
+        announce("Pin reset")
+    }
+
+    /// Move a non-essential tab into another space's parked row.
+    func move(_ tab: Tab, toSpace id: UUID) {
+        guard id != spaceID, !tab.essential else { return }
+        guard let index = tabs.firstIndex(where: { $0.id == tab.id }) else { return }
+        if splitID == tab.id { splitID = nil }
+        detach(tab)
+        if activeID == tab.id {
+            let nextIndex = min(index, max(0, tabs.count - 1))
+            if tabs.indices.contains(nextIndex) {
+                select(tabs[nextIndex])
+            } else if let pin = essentials.first {
+                select(pin)
+            } else {
+                newTab()
+            }
+        }
+        var row = parked[id] ?? loadRow(id)
+        row.tabs.append(tab)
+        row.tabs = Self.orderSpacePins(row.tabs)
+        parked[id] = row
+        writeSession(now: true)
+        writeParked(id)
+        announce("Moved to \(spaces.first { $0.id == id }?.name ?? "space")")
+    }
+
+    /// Persist another space's parked tabs (and that space's folders) to disk.
+    func writeParked(_ id: UUID) {
+        guard let row = parked[id] else { return }
+        let kept = folders
+        folders = row.folders
+        Session.write(
+            now: true,
+            space: id,
+            .init(
+                tabs: row.tabs.compactMap { sessionEntry(for: $0) },
+                active: row.tabs.firstIndex { $0.id == row.active } ?? 0,
+                folders: row.folders.map { Session.Folder(id: $0.id.uuidString, name: $0.name, collapsed: $0.collapsed) },
+                essentials: nil
+            )
+        )
+        folders = kept
     }
 
     /// Reorder within the combined pin block (essentials then this space's

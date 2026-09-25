@@ -11,6 +11,8 @@ enum Session {
         var pin: String?
         /// The name you gave the tab, when you gave it one.
         var name: String?
+        /// The address the pin (or essential) was made at, for Reset Pin.
+        var pinURL: String?
         /// One-level folder this tab sits in, when it sits in one.
         var folder: String?
         /// Whether that folder is folded shut. Read from any member; they agree.

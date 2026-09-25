@@ -359,6 +359,10 @@ final class Tab: ObservableObject, Identifiable {
     /// is all you need for the five or six pages you keep open all day.
     @Published var pin: String?
 
+    /// The address the pin (or essential) was made at. Reset Pin comes back
+    /// here; Replace URL with Current Page updates it.
+    var pinURL: URL?
+
     /// A pin that stays visible in every space, above that space's own tabs.
     @Published var essential = false
 
