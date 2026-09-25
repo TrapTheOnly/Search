@@ -760,6 +760,13 @@ enum TabReorderSlot {
         if to < from, index >= to, index < from { return 1 }
         return 0
     }
+
+    /// Open a gap at `at` for a tab arriving from another zone (model unchanged).
+    /// Items at and past the slot shift forward by one; nothing moves backward
+    /// into an occupied row (the pin "smush" bug).
+    static func inserted(index: Int, at: Int) -> CGFloat {
+        index >= at ? 1 : 0
+    }
 }
 
 /// A tab picked up and carried along its row, the others making way as it
