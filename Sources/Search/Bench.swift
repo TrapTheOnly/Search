@@ -308,13 +308,22 @@ final class Bench {
             }
             if let edge = request["edge"] as? String {
                 guard let tab = find(request, in: browser) ?? browser.active else { answer(missing(request)); return }
-                let side: SplitEdge = edge == "leading" || edge == "left" ? .leading : .trailing
+                let side: SplitEdge = {
+                    switch edge {
+                    case "leading", "left": return .leading
+                    case "trailing", "right": return .trailing
+                    case "top": return .top
+                    case "bottom": return .bottom
+                    default: return .trailing
+                    }
+                }()
                 browser.splitOnto(side, tab)
                 answer([
                     "split": browser.splitID?.uuidString ?? "",
                     "left": browser.splitLeftID?.uuidString ?? "",
                     "right": browser.splitRightID?.uuidString ?? "",
                     "ratio": browser.splitRatio,
+                    "axis": browser.splitAxis == .horizontal ? "horizontal" : "vertical",
                 ])
                 return
             }

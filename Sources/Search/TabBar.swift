@@ -734,23 +734,20 @@ struct Carried: ViewModifier {
     let move: (Int) -> Void
 
     @State private var held = false
+    @State private var lifted = false
     @State private var from = 0
     @State private var travel: CGFloat = 0
 
     func body(content: Content) -> some View {
         // What it has travelled, less the ground its new place has already
-        // given it.
-        let shift = held ? travel - CGFloat(index - from) * step : 0
+        // given it. While lifted into the mini-window, the strip slot stays put.
+        let shift = held && !lifted ? travel - CGFloat(index - from) * step : 0
         return content
             .offset(x: vertical ? 0 : shift, y: vertical ? shift : 0)
-            // Under the hand exactly. Its place in the row springs when it
-            // passes another tab, and the offset springs back the same way —
-            // until the next move of the hand cuts the offset's spring short
-            // and leaves the place's running: the tab jumped a whole slot and
-            // drifted back each time it passed one. Only the others glide.
+            .opacity(lifted ? 0.35 : 1)
             .transaction { if held { $0.animation = nil } }
             .zIndex(held ? 1 : 0)
-            .shadow(color: .black.opacity(held ? 0.14 : 0), radius: 12, y: 4)
+            .shadow(color: .black.opacity(held && !lifted ? 0.14 : 0), radius: 12, y: 4)
             .gesture(
                 DragGesture(minimumDistance: 5, coordinateSpace: .named(space))
                     .onChanged { value in
@@ -761,7 +758,29 @@ struct Carried: ViewModifier {
                                 browser.beginCarry(tabID)
                             }
                         }
-                        travel = vertical ? value.translation.height : value.translation.width
+                        let dx = value.translation.width
+                        let dy = value.translation.height
+                        // Leave the strip → lift into the mini-window (Zen interaction).
+                        if !lifted {
+                            let out: Bool = {
+                                if vertical {
+                                    return abs(dx) > Metrics.splitLift && abs(dx) > abs(dy) * 1.1
+                                }
+                                return dy > Metrics.splitLift && dy > abs(dx) * 1.1
+                            }()
+                            if out, let browser {
+                                lifted = true
+                                browser.liftCarry(at: browser.splitCarry.point == .zero
+                                    ? CGPoint(x: 200, y: 120)
+                                    : browser.splitCarry.point)
+                            }
+                        }
+                        if lifted {
+                            // Probe tracks the pointer; keep travel quiet so reorder does not fight.
+                            travel = 0
+                            return
+                        }
+                        travel = vertical ? dy : dx
                         let target = min(max(0, from + Int((travel / step).rounded())), count - 1)
                         if target != index {
                             withAnimation(Motion.settle) { move(target) }
@@ -771,6 +790,7 @@ struct Carried: ViewModifier {
                         browser?.finishCarry()
                         withAnimation(Motion.settle) {
                             held = false
+                            lifted = false
                             travel = 0
                         }
                     }

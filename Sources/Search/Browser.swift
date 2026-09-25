@@ -181,10 +181,10 @@ final class Browser: NSObject, ObservableObject {
     @Published var splitRightID: Tab.ID?
     /// Leading pane's share of the stage (0…1). Drag the handle to change it.
     @Published var splitRatio: CGFloat = 0.5
-    /// Tab being dragged from the strip or sidebar — stage shows edge-drop zones.
-    @Published var carryingTabID: Tab.ID?
-    /// Which stage edge the carried tab is over, if any.
-    @Published var splitDropEdge: SplitEdge?
+    /// Horizontal (side-by-side) or vertical (stacked) split.
+    @Published var splitAxis: SplitAxis = .horizontal
+    /// Lifted-tab / edge-drop state — separate object so the strip does not redraw every move.
+    let splitCarry = SplitCarry()
 
     var fieldShowing: Bool { editing || active?.isBlank ?? true }
 

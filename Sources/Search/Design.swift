@@ -168,9 +168,13 @@ enum Metrics {
     /// Hit width of the resize handle between panes (drawn thinner).
     static let splitHandle: CGFloat = 10
     /// How far from the stage edge a carried tab must land to open a split.
-    static let splitEdge: CGFloat = 52
+    static let splitEdge: CGFloat = 56
     /// Quiet chrome band above each pane (expand / close), not a Zen card.
     static let splitChrome: CGFloat = 26
+    /// Pull a strip tab this far into the stage to lift the mini-window.
+    static let splitLift: CGFloat = 36
+    /// Mini-window size while dragging a tab toward a split edge.
+    static let splitMini = CGSize(width: 208, height: 128)
 }
 
 // One spring for anything that moves between two places, one for anything that
@@ -180,6 +184,21 @@ enum Motion {
     static let glide = Animation.spring(response: 0.34, dampingFraction: 0.82)
     static let settle = Animation.spring(response: 0.30, dampingFraction: 0.86)
     static let quick = Animation.easeOut(duration: 0.14)
+    /// Glance / split flight — a touch longer so scale+fade read as one motion.
+    static let flight = Animation.spring(response: 0.38, dampingFraction: 0.86)
+}
+
+/// Trackpad taps for commit gestures (edge snap, force-press Glance, …).
+enum Haptics {
+    static func align() {
+        NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
+    }
+    static func level() {
+        NSHapticFeedbackManager.defaultPerformer.perform(.levelChange, performanceTime: .now)
+    }
+    static func generic() {
+        NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .now)
+    }
 }
 
 /// Search's mark — Drice's Subtract.svg, a pill with an S cut out of it,

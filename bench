@@ -282,7 +282,7 @@ def main(argv):
         elif len(args) == 1:
             request["id"] = args[0]
         elif args:
-            sys.exit("usage: bench split [ID]|end|swap|ratio N|edge left|right [ID]")
+            sys.exit("usage: bench split [ID]|end|swap|ratio N|edge left|right|top|bottom [ID]")
     elif verb == "folder":
         if args and args[0] == "new":
             request["new"] = " ".join(args[1:]) or "Folder"

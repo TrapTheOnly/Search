@@ -682,6 +682,15 @@ struct SideBar: View {
                     bumpHaptic(.loose)
                 }
                 pinTravel = CGSize(width: 0, height: value.translation.height)
+                // Drag out of the column → lift mini-window for edge split.
+                if abs(value.translation.width) > Metrics.splitLift,
+                   abs(value.translation.width) > abs(value.translation.height) {
+                    browser.liftCarry(at: browser.splitCarry.point == .zero
+                        ? CGPoint(x: Metrics.splitEdge + 8, y: 120)
+                        : browser.splitCarry.point)
+                    return
+                }
+                if browser.splitCarry.lifted { return }
                 // Above the loose list → pinned, or further → essentials.
                 if value.location.y < -8 {
                     if value.location.y < -8 - CGFloat(max(1, browser.spacePins)) * step - 20 {

@@ -114,65 +114,78 @@ final class Glance: NSObject, ObservableObject, WKNavigationDelegate, WKUIDelega
 struct GlanceCard: View {
     @ObservedObject var browser: Browser
     @ObservedObject var glance: Glance
+    @State private var appeared = false
 
     private var landing: GlanceLanding? { browser.glanceLanding }
 
     var body: some View {
         ZStack {
-            Color.black.opacity(landing == nil ? 0.10 : 0)
+            Color.black.opacity(dimOpacity)
                 .ignoresSafeArea()
                 .onTapGesture { browser.closeGlance() }
                 .allowsHitTesting(landing == nil)
+                .animation(Motion.flight, value: landing)
 
-            VStack(spacing: 0) {
-                HStack(spacing: 10) {
-                    Text(glance.title.isEmpty ? (glance.address.map { Address.pretty($0) } ?? "Glance") : glance.title)
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(Palette.ink)
-                        .lineLimit(1)
-                    if glance.loading { Ring() }
-                    Spacer(minLength: 8)
-                    Pill("Open") { browser.promoteGlance() }
-                    Pill("Split") { browser.splitGlance() }
-                    Door(icon: "xmark", help: "Close   esc") { browser.closeGlance() }
-                }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
-                .opacity(landing == nil ? 1 : 0)
-
-                Rectangle().fill(Palette.hairline).frame(height: 1)
-
-                // Solid Look (and space wash) under the web view — glass chrome
-                // around it, never a see-through hole while the first frame is held.
-                ZStack {
-                    Palette.ground
-                    if browser.prefs.usesSpaces {
-                        Spaces.chromeWash(browser.space.wash)
-                    }
-                    WebStage(page: glance.web)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-            .frame(maxWidth: 820, maxHeight: 560)
-            .background { glassChrome }
-            .overlay(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .strokeBorder(Palette.hairline.opacity(0.85), lineWidth: 1)
-            )
-            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-            .shadow(color: .black.opacity(landing == nil ? 0.16 : 0.04), radius: landing == nil ? 34 : 10, y: landing == nil ? 12 : 4)
-            .padding(28)
-            .scaleEffect(landingScale, anchor: landingAnchor)
-            .offset(y: landingOffset)
-            .opacity(landing == nil ? 1 : 0)
-            .allowsHitTesting(landing == nil)
-            .transition(.asymmetric(
-                insertion: .scale(scale: 0.96).combined(with: .opacity),
-                removal: .scale(scale: 0.98).combined(with: .opacity)
-            ))
+            card
+                .scaleEffect(cardScale, anchor: landingAnchor)
+                .offset(y: landingOffset)
+                .opacity(cardOpacity)
+                .allowsHitTesting(landing == nil)
         }
-        .animation(Motion.settle, value: landing)
-        .transition(.opacity)
+        .onAppear {
+            // Stagger so the first frame interpolates rather than popping at 1.0.
+            appeared = false
+            withAnimation(Motion.flight) { appeared = true }
+        }
+        .animation(Motion.flight, value: landing)
+        .animation(Motion.flight, value: appeared)
+    }
+
+    private var card: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 10) {
+                Text(glance.title.isEmpty ? (glance.address.map { Address.pretty($0) } ?? "Glance") : glance.title)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(Palette.ink)
+                    .lineLimit(1)
+                if glance.loading { Ring() }
+                Spacer(minLength: 8)
+                Pill("Open") { browser.promoteGlance() }
+                Pill("Split") { browser.splitGlance() }
+                Door(icon: "xmark", help: "Close   esc") { browser.closeGlance() }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            // Opaque header — page / dim behind must never ghost through titles.
+            .background(Palette.ground)
+            .opacity(landing == nil ? 1 : 0)
+
+            Rectangle().fill(Palette.hairline).frame(height: 1)
+
+            // Solid Look (and space wash) under the web view — glass chrome
+            // around it, never a see-through hole while the first frame is held.
+            ZStack {
+                Palette.ground
+                if browser.prefs.usesSpaces {
+                    Spaces.chromeWash(browser.space.wash)
+                }
+                WebStage(page: glance.web)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .frame(maxWidth: 820, maxHeight: 560)
+        .background { glassChrome }
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(Palette.hairline.opacity(0.85), lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .shadow(
+            color: .black.opacity(landing == nil ? 0.16 : 0.05),
+            radius: landing == nil ? 34 : 12,
+            y: landing == nil ? 12 : 4
+        )
+        .padding(28)
     }
 
     /// Glass plate: opaque Look ground first, soft space wash, then a light
@@ -185,14 +198,29 @@ struct GlanceCard: View {
                 shape.fill(Spaces.chromeWash(browser.space.wash))
             }
             shape.fill(.ultraThinMaterial)
-                .opacity(0.28)
+                .opacity(0.22)
         }
     }
 
-    private var landingScale: CGFloat {
+    private var dimOpacity: Double {
+        if landing != nil { return 0 }
+        return appeared ? 0.12 : 0
+    }
+
+    private var cardScale: CGFloat {
+        if !appeared { return 0.94 }
         switch landing {
-        case .tab: return 0.12
-        case .split: return 0.55
+        case .tab: return 0.08
+        case .split: return 0.48
+        case nil: return 1
+        }
+    }
+
+    private var cardOpacity: Double {
+        if !appeared { return 0 }
+        // Hold opacity through most of the flight so frames interpolate; fade late.
+        switch landing {
+        case .tab, .split: return 0.15
         case nil: return 1
         }
     }
@@ -207,9 +235,9 @@ struct GlanceCard: View {
 
     private var landingOffset: CGFloat {
         switch landing {
-        case .tab: return -120
-        case .split: return 0
-        case nil: return 0
+        case .tab: return -140
+        case .split: return 24
+        case nil: return appeared ? 0 : 10
         }
     }
 }
