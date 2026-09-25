@@ -562,18 +562,77 @@ final class Bench {
             }
             // "repeat": the press a key held down sends again and again.
             let repeats = (request["mods"] as? [String] ?? []).contains("repeat")
+            // "hold": leave the modifiers down (no flagsChanged release) so a
+            // held ⌥Tab walk can be stepped and then released with a later press.
+            let hold = (request["mods"] as? [String] ?? []).contains("hold")
+            let windowNumber = Links.window?.windowNumber ?? 0
+            // Modifier chords that commit on key-up (⌥Tab switcher) need a
+            // flagsChanged down/up around the key, the way a real keyboard does.
+            func flagEvent(_ flags: NSEvent.ModifierFlags) -> NSEvent? {
+                // keyCode 58 = left Option; used when option is among the flags so
+                // AppKit treats it as a real modifier change.
+                let code: UInt16 = flags.contains(.option) ? 58
+                    : flags.contains(.control) ? 59
+                    : flags.contains(.command) ? 55
+                    : flags.contains(.shift) ? 56 : 0
+                return NSEvent.keyEvent(
+                    with: .flagsChanged, location: .zero, modifierFlags: flags,
+                    timestamp: ProcessInfo.processInfo.systemUptime,
+                    windowNumber: windowNumber, context: nil,
+                    characters: "", charactersIgnoringModifiers: "",
+                    isARepeat: false, keyCode: code
+                )
+            }
+            var posted = 0
+            // Empty chars: only change modifiers (e.g. release ⌥ after a held walk).
+            if chars.isEmpty {
+                let eventFlags: NSEvent.ModifierFlags = hold ? flags : []
+                if let event = flagEvent(eventFlags) {
+                    NSApp.postEvent(event, atStart: false)
+                    posted += 1
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
+                    answer([
+                        "active": browser.active.map { String($0.id.uuidString.prefix(8)).lowercased() } ?? "",
+                        "posted": posted,
+                        "switcher": browser.tabSwitcher.active,
+                        "visible": browser.tabSwitcher.visible,
+                    ])
+                }
+                return
+            }
+            if !flags.isEmpty, let down = flagEvent(flags) {
+                NSApp.postEvent(down, atStart: false)
+                posted += 1
+            }
             for type in [NSEvent.EventType.keyDown, .keyUp] {
                 guard let event = NSEvent.keyEvent(
                     with: type, location: .zero, modifierFlags: flags,
                     timestamp: ProcessInfo.processInfo.systemUptime,
-                    windowNumber: Links.window?.windowNumber ?? 0, context: nil,
+                    windowNumber: windowNumber, context: nil,
                     characters: chars, charactersIgnoringModifiers: chars,
                     isARepeat: repeats && type == .keyDown, keyCode: UInt16(code)
                 ) else { continue }
-                NSApp.postEvent(event, atStart: false)
+                // Prefer the app's own key hook (same path as the local monitor)
+                // so a SEARCH_PROBE run without a first-responder still switches.
+                if type == .keyDown, let hook = ContentView.keyHook {
+                    _ = hook(event)
+                } else {
+                    NSApp.postEvent(event, atStart: false)
+                }
+                posted += 1
             }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-                answer(["active": browser.active.map { String($0.id.uuidString.prefix(8)).lowercased() } ?? ""])
+            if !flags.isEmpty, !hold, let up = flagEvent([]) {
+                NSApp.postEvent(up, atStart: false)
+                posted += 1
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
+                answer([
+                    "active": browser.active.map { String($0.id.uuidString.prefix(8)).lowercased() } ?? "",
+                    "posted": posted,
+                    "switcher": browser.tabSwitcher.active,
+                    "visible": browser.tabSwitcher.visible,
+                ])
             }
 
         case "key":
