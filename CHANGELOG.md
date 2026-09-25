@@ -45,6 +45,7 @@ in [ROADMAP.md](ROADMAP.md).
 
 ### Fixed
 
+- Selecting a tab that is not one of the two split panes leaves Split and shows that tab, as in Safari / Arc / Zen. Switching between the two panes, maximize, and unsplit are unchanged.
 - Sidebar: after pinning a tab then switching spaces and back, pins restore as title rows under **Pinned** (not an icon grid) without overlaying loose rows or leaving ghost favicons. Essentials stay labelled icon squares above the swipe. Menu copy is **Pin to this space** vs **Make Essential (all spaces)**.
 - Essentials no longer blink when switching spaces in the top tab strip: they stay mounted beside the swipe, while only that space's pins and loose tabs move. A signed-out space still shows them (profile-wide); its session file no longer claims them — use a Profile for full isolation.
 - On a new tab, the address field's whole pill takes the click and shows the I-beam, without changing how the placeholder is drawn: an invisible hit pad covers the air around the letters. Stretching the AppKit field to the pill height (and a centred cell on top of that) had left the text top-heavy and a cloudy rectangle inside the chrome.

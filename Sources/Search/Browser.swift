@@ -1219,16 +1219,24 @@ final class Browser: NSObject, ObservableObject {
         cancelTabEdit()
         summoning = false
         suggesting = nil
-        // Keep physical left/right; only remapping the mate pointer so focus
-        // and splitID stay distinct. Pane order is splitLeftID / splitRightID.
-        if splitID == tab.id { splitID = activeID }
-        syncSplitMate()
+        // Leave split when activating any tab outside the pair (Safari/Arc/Zen).
+        // Switching between the two panes keeps the split; remaps mate only.
+        if splitPanes != nil, !isSplitMember(tab) {
+            withAnimation(Motion.settle) { endSplit() }
+        } else {
+            // Keep physical left/right; only remapping the mate pointer so focus
+            // and splitID stay distinct. Pane order is splitLeftID / splitRightID.
+            if splitID == tab.id { splitID = activeID }
+            syncSplitMate()
+        }
         guard tab.id != activeID else { return }
         // Coming back to the tab whose video is out brings it home first, so
         // it is never lifted and landed in the same breath.
         if floating == tab.id { land() }
         leaving()
         activeID = tab.id
+        // Mate tracks the non-focused pane after focus moves.
+        if splitPanes != nil { syncSplitMate() }
         tab.touch()
         // A tab brought back from last time, or waking from ⌘W while pinned,
         // opens the moment you look at it — and only if there was nothing to
