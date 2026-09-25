@@ -18,7 +18,7 @@ import SwiftUI
 //   not unload or rebuild them (sticky strip in TabBar; sticky essentials
 //   block above the sidebar swipe in Side).
 // - Ordinary pins and tab folders are **per space**.
-// - Glance is option-click / menu peek (Peek.swift remains shift-click).
+// - Glance is option-click / force-press / menu (Peek.swift remains shift-click).
 // - Split shows two strip tabs side by side; not written to the session.
 // - A space with `sharesSignIns == false` ("signed out") isolates cookies /
 //   sign-ins only. Essentials still show there — they are not migrated into

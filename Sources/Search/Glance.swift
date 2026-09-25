@@ -1,9 +1,9 @@
 import SwiftUI
 import WebKit
 
-// A short-lived page over the one you are on. Option-click a link, or Glance
-// in a tab's menu: one web view, gone when you close it, never written to
-// the session. Only one at a time.
+// A short-lived page over the one you are on. Option-click or force-press a
+// link, or Glance in a tab's menu: one web view, gone when you close it, never
+// written to the session. Only one at a time. Distinct from Peek (shift-click).
 
 /// Where a glance is flying when Open or Split is pressed.
 enum GlanceLanding: Equatable {
@@ -25,10 +25,10 @@ final class Glance: NSObject, ObservableObject, WKNavigationDelegate, WKUIDelega
         let view = PageView(frame: .zero, configuration: Web.configuration())
         view.allowsMagnification = true
         view.allowsBackForwardNavigationGestures = false
-        // System force-press / trackpad peek stays on. Action buttons on that
-        // preview are owned by WebKit/macOS (Open / Reading List / …) — there
-        // is no public AppKit hook to retarget them at Search or Glance.
+        // Keep force-press hit-testing on; PageView routes http(s) links to
+        // Glance and suppresses WebKit's Quick Look / Reading List preview.
         view.allowsLinkPreview = true
+        view.onForceLink = { [weak browser] url in browser?.glance(url) }
         view.holdForFirstFrame()
         if #available(macOS 13.3, *) { view.isInspectable = true }
         self.web = view
