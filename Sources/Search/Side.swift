@@ -3,10 +3,11 @@ import SwiftUI
 
 /// The tabs, down the left instead of across the top.
 ///
-/// Zen strip: Essentials as small icon squares (all spaces), Pinned as title
-/// rows (this space only), then loose tabs — with a hairline under Essentials
-/// and under the pin block. The traffic lights keep their corner; the column
-/// starts under them and the page takes the whole height beside it.
+/// Zen strip: Essentials as fill-width icon cells (all spaces, up to three
+/// per row), Pinned as title rows (this space only), then loose tabs — with
+/// a hairline under Essentials and under the pin block. The traffic lights
+/// keep their corner; the column starts under them and the page takes the
+/// whole height beside it.
 struct SideBar: View {
     @ObservedObject var browser: Browser
     @ObservedObject var prefs: Preferences
@@ -341,17 +342,18 @@ struct SideBar: View {
     private var pinnedTabs: [Tab] { browser.tabs.filter { $0.pin != nil && !$0.essential } }
     private var looseTabs: [Tab] { browser.tabs.filter { $0.pin == nil && !$0.essential } }
 
-    /// Essentials stay a square grid: three columns is the block's own shape —
-    /// up to six essentials, two full rows; past six the block widens.
+    /// Essentials fill the row, Zen-style: up to three equal cells.
+    /// 1 → full width; 2 → half/half; 3 → thirds; past three wrap another row.
+    /// Never reserve empty columns (that left the sparse single-icon dead space).
     private static func pinColumns(_ count: Int) -> Int {
-        max(3, (count + 1) / 2)
+        min(3, max(1, count))
     }
 
     /// However many columns the count calls for, they split the row's own
     /// width between them — the row is what fills edge to edge, not each
     /// cell on its own, so this grows past 34 just as readily as it shrinks
     /// below it.
-    private var pinWidth: CGFloat { pinWidth(for: browser.spacePins) }
+    private var pinWidth: CGFloat { pinWidth(for: browser.essentials.count) }
 
     private func pinWidth(for count: Int) -> CGFloat {
         let cols = SideBar.pinColumns(count)
@@ -360,17 +362,15 @@ struct SideBar: View {
         return max(20, available / CGFloat(cols))
     }
 
-    /// The one dimension that doesn't chase the sidebar's width: past three
-    /// columns' worth of room a cell would otherwise turn into a big square
-    /// rather than the wide, short button pinned tabs actually look like
-    /// everywhere else in this app. It only shrinks below 34 alongside the
-    /// width, once a narrow column leaves no other choice.
+    /// Height stays the classic square; width is what fills. Only shrinks
+    /// below 34 when a narrow sidebar leaves no other choice.
     private var pinHeight: CGFloat {
         min(SideBar.square, pinWidth)
     }
 
-    /// Profile-wide essentials: labelled icon squares, always on, above this
-    /// space's pin rows. A hairline sits under the block (Zen chrome).
+    /// Profile-wide essentials: labelled icon cells that fill the row (up to
+    /// three), always on, above this space's pin rows. Hairline under the
+    /// block (Zen chrome). Width spring-animates when the count changes.
     private var essentialsBlock: some View {
         let tabs = browser.essentials
         let cols = SideBar.pinColumns(tabs.count)
@@ -415,6 +415,8 @@ struct SideBar: View {
                 }
             }
             .coordinateSpace(name: "essentials")
+            .animation(Motion.settle, value: width)
+            .animation(Motion.settle, value: cols)
             Rectangle()
                 .fill(Palette.hairline)
                 .frame(height: 1)
@@ -845,27 +847,38 @@ struct SideBar: View {
 /// its cells only once the column is on screen, where the column's slide
 /// can't take them along: folded with ⌘S and brought back, the squares stood
 /// in place while the column came in beneath them. A dozen squares need no
-/// laziness.
+/// laziness. Width/height are animatable so add/remove springs the split
+/// instead of jumping.
 private struct PinGrid: Layout {
-    let columns: Int
-    let width: CGFloat
-    let height: CGFloat
-    let spacing: CGFloat
+    var columns: Int
+    var width: CGFloat
+    var height: CGFloat
+    var spacing: CGFloat
+
+    var animatableData: AnimatablePair<CGFloat, CGFloat> {
+        get { AnimatablePair(width, height) }
+        set {
+            width = newValue.first
+            height = newValue.second
+        }
+    }
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let rows = (subviews.count + columns - 1) / columns
+        let cols = max(1, columns)
+        let rows = max(1, (subviews.count + cols - 1) / cols)
         return CGSize(
-            width: CGFloat(columns) * width + CGFloat(max(0, columns - 1)) * spacing,
+            width: CGFloat(cols) * width + CGFloat(max(0, cols - 1)) * spacing,
             height: CGFloat(rows) * height + CGFloat(max(0, rows - 1)) * spacing
         )
     }
 
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let cols = max(1, columns)
         for (index, subview) in subviews.enumerated() {
             subview.place(
                 at: CGPoint(
-                    x: bounds.minX + CGFloat(index % columns) * (width + spacing),
-                    y: bounds.minY + CGFloat(index / columns) * (height + spacing)
+                    x: bounds.minX + CGFloat(index % cols) * (width + spacing),
+                    y: bounds.minY + CGFloat(index / cols) * (height + spacing)
                 ),
                 proposal: ProposedViewSize(width: width, height: height)
             )
