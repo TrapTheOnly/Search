@@ -1721,6 +1721,9 @@ final class Browser: NSObject, ObservableObject {
         // it does in every other browser (see MiddleRelay).
         // From a private tab, the new one is private too, as for ⌘-click.
         tab.onMiddleClick = { [weak self] tab, url in self?.open(url, foreground: false, from: tab) }
+        // Force-press / trackpad hard-press on a link: Glance, same as Option-click.
+        // System Quick Look / Reading List is replaced in PageView.
+        tab.onForceLink = { [weak self] url in self?.glance(url) }
         tab.onCross = { [weak self] tab, url in self?.replace(tab, going: url) }
 
         // The caret in a sign-in box: the accounts kept for this site hang
@@ -2093,8 +2096,10 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
             DispatchQueue.main.async { [weak self] in self?.peek(url, from: from) }
             return
         }
-        // Option-click: glance at the link over this page (see Glance.swift).
-        // Distinct from Peek (shift-click) and from ⌘-click (new tab).
+        // Option-click or force-press: glance at the link over this page
+        // (see Glance.swift). Distinct from Peek (shift-click) and from
+        // ⌘-click (new tab). Force-press is routed in PageView so WebKit's
+        // Quick Look / Reading List preview never appears.
         if action.navigationType == .linkActivated,
            ["http", "https"].contains(scheme),
            action.modifierFlags.contains(.option),

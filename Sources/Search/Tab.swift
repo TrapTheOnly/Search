@@ -1,4 +1,5 @@
 import ImageIO
+import ObjectiveC
 import SwiftUI
 import WebKit
 
@@ -321,6 +322,9 @@ final class Tab: ObservableObject, Identifiable {
     /// The middle button was let go over a link. The browser opens it in a
     /// tab of its own beside this one, without leaving the page you are on.
     var onMiddleClick: ((Tab, URL) -> Void)?
+    /// Force-press / trackpad hard-press on a link. Opens Glance, same as
+    /// Option-click — not WebKit's Quick Look / Reading List preview.
+    var onForceLink: ((URL) -> Void)?
     /// Sent where this tab's view can't go: from an extension's page to the
     /// web or another extension, or from the web to an extension's page.
     /// WebKit keeps each kind of view to its own pages, so the tab has to be
@@ -431,12 +435,16 @@ final class Tab: ObservableObject, Identifiable {
         // the window with a picture of the last one behind it; ours is in
         // PageView, and it moves nothing but a disc.
         web.allowsBackForwardNavigationGestures = false
-        // Force-press / trackpad link preview: system UI. Preview action
-        // buttons (Open, Reading List, …) are not customisable on macOS —
-        // WKUIDelegate preview hooks are iOS-only.
+        // Force-press stays on so WebKit's trackpad hit-test runs; PageView
+        // replaces the system Quick Look / Reading List preview with Glance
+        // (see PageView._immediateActionAnimationController…).
         web.allowsLinkPreview = true
         web.onPull = { [weak self] pull in self?.pull = pull }
         web.onTouch = { [weak self] in self?.uncover() }
+        web.onForceLink = { [weak self] url in
+            guard let self else { return }
+            self.onForceLink?(url)
+        }
         web.searchName = { [weak self] in self?.searchName?() }
         web.onSearch = { [weak self] text in
             guard let self else { return }
@@ -1192,6 +1200,52 @@ final class MiddleRelay: NSObject, WKScriptMessageHandler {
     }
 }
 
+/// Force-press on a link → Glance. Conforms at runtime to AppKit's private
+/// `NSImmediateActionAnimationController` so WebKit accepts it in place of
+/// Quick Look. Opens on will-begin (when the hard-press commits), not on
+/// hit-test alone — a light press that never deep-clicks stays silent.
+private final class GlanceForceAction: NSObject {
+    private let url: URL
+    private let open: (URL) -> Void
+    private var opened = false
+
+    /// Whether AppKit still exposes the private animation-controller protocol
+    /// WebKit checks before accepting a custom force-press handler.
+    static var canAnimate: Bool {
+        claimProtocol()
+        return NSProtocolFromString("NSImmediateActionAnimationController") != nil
+    }
+
+    init(url: URL, open: @escaping (URL) -> Void) {
+        self.url = url
+        self.open = open
+        super.init()
+        Self.claimProtocol()
+    }
+
+    private static var claimed = false
+    @discardableResult
+    private static func claimProtocol() -> Bool {
+        guard !claimed else {
+            return NSProtocolFromString("NSImmediateActionAnimationController") != nil
+        }
+        claimed = true
+        guard let proto = NSProtocolFromString("NSImmediateActionAnimationController") else { return false }
+        _ = class_addProtocol(GlanceForceAction.self, proto)
+        return true
+    }
+
+    @objc func recognizerWillBeginAnimation(_ recognizer: Any) {
+        guard !opened else { return }
+        opened = true
+        open(url)
+    }
+
+    @objc func recognizerDidUpdateAnimation(_ recognizer: Any) {}
+    @objc func recognizerDidCancelAnimation(_ recognizer: Any) {}
+    @objc func recognizerDidCompleteAnimation(_ recognizer: Any) {}
+}
+
 /// A web view that reads the two-finger swipe for itself.
 final class PageView: WKWebView {
     /// What extensions added to the right-click menu, at the end of it.
@@ -1261,10 +1315,42 @@ final class PageView: WKWebView {
     /// Told the moment the page is reached for — a click, a scroll — so the
     /// picture of a tab waking up never stands between you and the page.
     var onTouch: (() -> Void)?
+    /// Force-press landed on an http(s) link. Browser opens Glance; system
+    /// Quick Look / Reading List is suppressed (see SPI override below).
+    var onForceLink: ((URL) -> Void)?
 
     override func mouseDown(with event: NSEvent) {
         onTouch?()
         super.mouseDown(with: event)
+    }
+
+    /// WebKit asks before showing its force-press preview. For an http(s)
+    /// link we hand back a controller that opens Glance and never the
+    /// system Quick Look / "Open with…" sheet. Returning `nil` keeps the
+    /// default (dictionary lookup, data detectors). `NSNull` would cancel
+    /// the gesture entirely — wrong here, because we still want the press
+    /// to commit into Glance. SPI; the public preview delegates are iOS-only.
+    @objc(_immediateActionAnimationControllerForHitTestResult:withType:userData:)
+    func immediateActionAnimationController(
+        for hitTestResult: Any,
+        with type: Int,
+        userData: Any?
+    ) -> Any? {
+        let link = (hitTestResult as AnyObject).value(forKey: "absoluteLinkURL") as? URL
+        guard let url = link,
+              let scheme = url.scheme?.lowercased(),
+              scheme == "http" || scheme == "https"
+        else { return nil }
+        // No callback: still kill Quick Look so force-press never shows
+        // Reading List / "Open with…".
+        guard let open = onForceLink else { return NSNull() }
+        // Prefer a real animation controller so Glance opens when the hard
+        // press commits (will-begin), not on a light press that never deep-clicks.
+        if GlanceForceAction.canAnimate {
+            return GlanceForceAction(url: url, open: open)
+        }
+        open(url)
+        return NSNull()
     }
 
     /// The side buttons a mouse has for back and forward — button 3 and 4.
