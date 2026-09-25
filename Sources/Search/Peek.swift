@@ -101,7 +101,13 @@ struct PeekPanel: View {
     private var panel: some View {
         let shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
         return ZStack {
-            ChromeFill(tint: browser.prefs.usesSpaces ? browser.space.wash : nil)
+            // Opaque plate under the page even when WebKit holds the first frame
+            // at alpha 0 — never see through to the dimmed tab underneath.
+            Palette.ground
+            if browser.prefs.usesSpaces {
+                Spaces.chromeWash(browser.space.wash)
+                    .allowsHitTesting(false)
+            }
             Page(tab: tab)
         }
         .clipShape(shape)

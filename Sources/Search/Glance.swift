@@ -145,7 +145,10 @@ struct GlanceCard: View {
                 // Solid Look (and space wash) under the web view — glass chrome
                 // around it, never a see-through hole while the first frame is held.
                 ZStack {
-                    ChromeFill(tint: browser.prefs.usesSpaces ? browser.space.wash : nil)
+                    Palette.ground
+                    if browser.prefs.usesSpaces {
+                        Spaces.chromeWash(browser.space.wash)
+                    }
                     WebStage(page: glance.web)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -172,7 +175,8 @@ struct GlanceCard: View {
         .transition(.opacity)
     }
 
-    /// Glass plate: Look ground, a soft space wash, then a thin material sheen.
+    /// Glass plate: opaque Look ground first, soft space wash, then a light
+    /// material sheen so the card reads as glass without punching holes.
     private var glassChrome: some View {
         let shape = RoundedRectangle(cornerRadius: 16, style: .continuous)
         return ZStack {
@@ -181,7 +185,7 @@ struct GlanceCard: View {
                 shape.fill(Spaces.chromeWash(browser.space.wash))
             }
             shape.fill(.ultraThinMaterial)
-                .opacity(0.55)
+                .opacity(0.28)
         }
     }
 
