@@ -18,6 +18,8 @@ struct TabBar: View {
     @State private var plussed = false
     /// How wide the doors at the far end are, extension buttons included.
     @State private var doors: CGFloat = 0
+    /// Live reorder preview for the top strip (commit on drop — see `Carried`).
+    @State private var tabReorder: TabReorder? = nil
 
     var body: some View {
         // A GeometryReader is only here to measure the width. Its content is
@@ -217,7 +219,8 @@ struct TabBar: View {
                     vertical: false,
                     space: "essentials",
                     tabID: tab.id,
-                    browser: browser
+                    browser: browser,
+                    reorder: $tabReorder
                 ) { target in
                     browser.movePin(tab, to: target)
                 })
@@ -313,7 +316,8 @@ struct TabBar: View {
                     vertical: false,
                     space: "strip",
                     tabID: tab.id,
-                    browser: browser
+                    browser: browser,
+                    reorder: $tabReorder
                 ) { target in
                     guard browser.tabs.indices.contains(target) else { return }
                     let dest = browser.tabs[target]
@@ -724,19 +728,47 @@ private struct TabPill: View {
     }
 }
 
-/// The address, inside its own tab.
-///
-/// A field of its own rather than SwiftUI's, for one reason: the system paints
-/// selected text as a solid block of accent colour, which over a pale grey pill
-/// this size is the loudest thing in the window. Here it is a tenth of the ink.
+/// Live preview of a tab drag-reorder. Shared so siblings can part without
+/// mutating model order mid-drag (which caused the carried tab to jump back
+/// to its old slot, then re-animate).
+struct TabReorder: Equatable {
+    var space: String
+    var from: Int
+    var preview: Int
+}
+
+/// Slot index from drag travel, with hysteresis so the preview does not thrash
+/// when the pointer sits near a boundary.
+enum TabReorderSlot {
+    static func index(travel: CGFloat, from: Int, current: Int, count: Int, step: CGFloat) -> Int {
+        guard step > 0, count > 0 else { return from }
+        let last = count - 1
+        let ideal = min(max(0, from + Int((travel / step).rounded())), last)
+        if ideal == current { return current }
+        // Require ~15% past the midpoint before flipping the live preview.
+        let mid = CGFloat(ideal - from) * step
+        let slack = step * 0.15
+        if ideal > current {
+            return travel >= mid - step / 2 + slack ? ideal : current
+        }
+        return travel <= mid + step / 2 - slack ? ideal : current
+    }
+
+    /// Where `index` sits while `from` is previewed at `to` (model still at `from`).
+    static func parted(index: Int, from: Int, to: Int) -> CGFloat {
+        if from < to, index > from, index <= to { return -1 }
+        if to < from, index >= to, index < from { return 1 }
+        return 0
+    }
+}
+
 /// A tab picked up and carried along its row, the others making way as it
 /// passes them — across the top or down the column alike.
 ///
 /// The hand's travel is the tab's own: every move of the pointer redraws the
-/// one tab being carried, not the whole column or bar around it (with the
-/// neighbouring spaces drawn beside it, that was every row and every square
-/// of three spaces, each frame, and the tab trailed behind the hand). The row
-/// only redraws when the tab actually changes place.
+/// one tab being carried, not the whole column or bar around it. Model order
+/// commits only on drop (siblings part via `reorder` preview), so the carried
+/// tab never snaps back to its old index mid-drag.
 struct Carried: ViewModifier {
     let index: Int
     let count: Int
@@ -748,21 +780,23 @@ struct Carried: ViewModifier {
     let space: String
     var tabID: Tab.ID? = nil
     var browser: Browser? = nil
+    /// Optional shared preview; when set, siblings part live without `move` until drop.
+    var reorder: Binding<TabReorder?>? = nil
     let move: (Int) -> Void
 
     @State private var held = false
     @State private var lifted = false
     @State private var from = 0
     @State private var travel: CGFloat = 0
+    @State private var preview = 0
 
     func body(content: Content) -> some View {
-        // What it has travelled, less the ground its new place has already
-        // given it. While lifted into the mini-window, the strip slot stays put.
-        let shift = held && !lifted ? travel - CGFloat(index - from) * step : 0
+        let shift = axisShift
         return content
             .offset(x: vertical ? 0 : shift, y: vertical ? shift : 0)
             .opacity(lifted ? 0.35 : 1)
             .transaction { if held { $0.animation = nil } }
+            .animation(held ? nil : Motion.settle, value: reorder?.wrappedValue?.preview)
             .zIndex(held ? 1 : 0)
             .shadow(color: .black.opacity(held && !lifted ? 0.14 : 0), radius: 12, y: 4)
             .gesture(
@@ -771,9 +805,11 @@ struct Carried: ViewModifier {
                         if !held {
                             held = true
                             from = index
+                            preview = index
                             if let tabID, let browser {
                                 browser.beginCarry(tabID)
                             }
+                            publish(preview: index)
                         }
                         let dx = value.translation.width
                         let dy = value.translation.height
@@ -787,6 +823,7 @@ struct Carried: ViewModifier {
                             }()
                             if out, let browser {
                                 lifted = true
+                                reorder?.wrappedValue = nil
                                 browser.liftCarry(at: browser.splitCarry.point == .zero
                                     ? CGPoint(x: 200, y: 120)
                                     : browser.splitCarry.point)
@@ -798,23 +835,56 @@ struct Carried: ViewModifier {
                             return
                         }
                         travel = vertical ? dy : dx
-                        let target = min(max(0, from + Int((travel / step).rounded())), count - 1)
-                        if target != index {
-                            withAnimation(Motion.settle) { move(target) }
+                        let next = TabReorderSlot.index(
+                            travel: travel, from: from, current: preview, count: count, step: step
+                        )
+                        if next != preview {
+                            preview = next
+                            publish(preview: next)
                         }
                     }
                     .onEnded { _ in
+                        let target = preview
+                        let origin = from
+                        let didLift = lifted
                         browser?.finishCarry()
-                        withAnimation(Motion.settle) {
-                            held = false
-                            lifted = false
-                            travel = 0
+                        reorder?.wrappedValue = nil
+                        if !didLift, target != origin {
+                            withAnimation(Motion.settle) {
+                                move(target)
+                                held = false
+                                lifted = false
+                                travel = 0
+                            }
+                        } else {
+                            withAnimation(Motion.settle) {
+                                held = false
+                                lifted = false
+                                travel = 0
+                            }
                         }
                     }
             )
     }
+
+    /// Held tab follows the pointer; siblings shift by one step along the preview path.
+    private var axisShift: CGFloat {
+        if held && !lifted { return travel }
+        guard let session = reorder?.wrappedValue, session.space == space, session.from != index
+        else { return 0 }
+        return TabReorderSlot.parted(index: index, from: session.from, to: session.preview) * step
+    }
+
+    private func publish(preview: Int) {
+        reorder?.wrappedValue = TabReorder(space: space, from: from, preview: preview)
+    }
 }
 
+/// The address, inside its own tab.
+///
+/// A field of its own rather than SwiftUI's, for one reason: the system paints
+/// selected text as a solid block of accent colour, which over a pale grey pill
+/// this size is the loudest thing in the window. Here it is a tenth of the ink.
 struct TabAddressField: NSViewRepresentable {
     @ObservedObject var browser: Browser
 
