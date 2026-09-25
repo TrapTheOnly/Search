@@ -237,7 +237,7 @@ final class Bench {
             answer([
                 "tabs": browser.tabs.map(describe),
                 "essentials": browser.essentials.map(describe),
-                "pins": browser.tabs.filter { $0.pin != nil }.map(describe),
+                "pins": browser.tabs.filter { $0.pin != nil && !$0.essential }.map(describe),
             ])
 
         case "pin":
