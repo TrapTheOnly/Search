@@ -13,6 +13,7 @@ in [ROADMAP.md](ROADMAP.md).
 
 ### Added
 
+- Option+Tab switches tabs in the current space by most recently used. A quick tap jumps to the last other tab; holding Option past a short delay shows a sneak-peek overlay of tab previews — Tab / Shift+Tab (or arrows) move the highlight, release Option to go there. Control+Tab still walks the strip in order.
 - Glance: Option-click or force-press a link, or Glance in a tab's menu, opens it over the page you are on. Close it, open it as a tab, or split it to the side. Never written to the session. Distinct from Peek (shift-click). WebKit's Quick Look / Reading List link preview is replaced by Glance.
 - Split view: two tabs side by side in the one window, from Glance or Split to the Side. Closing a pane (or Escape / ⌘W) puts one page back.
 - Tab folders: one named group in the tab strip / sidebar. Right-click › New Folder / Add to Folder; drag onto a folder chip. No nesting. Per-space, like ordinary pins.
