@@ -1008,6 +1008,11 @@ private struct SideRow: View {
 
     private var editing: Bool { browser.editingTab == tab.id }
 
+    /// A pin holding no page (put down with ⌘W, or restored and not yet
+    /// opened). The trailing control deletes the pin rather than "closing"
+    /// a session that is already gone.
+    private var dormantPin: Bool { tab.pin != nil && tab.asleep }
+
     /// The ring or the speaker, which stay for as long as the page loads or
     /// plays (or is muted) and so keep a place of their own at the end of the
     /// row. The cross is only there under the pointer, and takes none.
@@ -1015,6 +1020,17 @@ private struct SideRow: View {
     /// The speaker, which can be pressed, and so steps in beside the cross
     /// under the pointer rather than hiding beneath it as the ring does.
     private var speaker: Bool { !tab.loading && (tab.noisy || tab.muted) }
+
+    /// Trailing control: close an open pin/tab; for a dormant pin, unpin and
+    /// discard the row so it leaves the list entirely.
+    private func trailingAct() {
+        if dormantPin {
+            browser.unpin(tab)
+            if tab.asleep { browser.close(tab) }
+        } else {
+            close()
+        }
+    }
 
     var body: some View {
         HStack(spacing: 8) {
@@ -1082,8 +1098,8 @@ private struct SideRow: View {
             if !editing {
                 ZStack {
                     if hovering {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 8, weight: .semibold))
+                        Image(systemName: dormantPin ? "trash" : "xmark")
+                            .font(.system(size: dormantPin ? 8.5 : 8, weight: .semibold))
                             .foregroundStyle(Palette.muted)
                             .frame(width: 15, height: 15)
                             .background(Palette.ink.opacity(0.07), in: Circle())
@@ -1091,26 +1107,28 @@ private struct SideRow: View {
                     }
                 }
                 .frame(width: 15, height: 15)
+                .help(dormantPin ? "Remove pin" : "Close tab")
                 .overlay {
                     Color.clear
                         .frame(width: 30, height: 28)
                         .contentShape(Rectangle())
-                        .onTapGesture { if hovering { close() } }
+                        .onTapGesture { if hovering { trailingAct() } }
                 }
                 .padding(.trailing, 7)
             }
         }
         .animation(Motion.quick, value: tab.loading)
         .animation(Motion.quick, value: speaker)
+        .animation(Motion.quick, value: dormantPin)
         .background { ground }
         .modifier(Shake(travel: shake))
         .contentShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
         .modifier(OneClick(double: false) {
             if live { browser.beginTabEdit(tab) } else { browser.select(tab) }
         })
-        .overlay { MiddleClick(act: close) }
+        .overlay { MiddleClick(act: trailingAct) }
         .onHover { hovering = $0 }
-        .contextMenu { TabMenu(browser: browser, tab: tab, close: close) }
+        .contextMenu { TabMenu(browser: browser, tab: tab, close: trailingAct) }
         .animation(Motion.quick, value: hovering)
         .animation(Motion.glide, value: editing)
         .onChange(of: browser.refusals) { _, _ in

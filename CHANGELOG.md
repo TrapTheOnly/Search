@@ -45,6 +45,7 @@ in [ROADMAP.md](ROADMAP.md).
 
 ### Fixed
 
+- Sidebar: a pinned tab that is not open (asleep — put down with ⌘W, or restored and not yet loaded) shows a trash control that removes the pin from the list, instead of a close (X) that only puts a live tab down. Open pins keep the normal close affordance.
 - Selecting a tab that is not one of the two split panes leaves Split and shows that tab, as in Safari / Arc / Zen. Switching between the two panes, maximize, and unsplit are unchanged.
 - Sidebar: after pinning a tab then switching spaces and back, pins restore as title rows under **Pinned** (not an icon grid) without overlaying loose rows or leaving ghost favicons. Essentials stay labelled icon squares above the swipe. Menu copy is **Pin to this space** vs **Make Essential (all spaces)**.
 - Essentials no longer blink when switching spaces in the top tab strip: they stay mounted beside the swipe, while only that space's pins and loose tabs move. A signed-out space still shows them (profile-wide); its session file no longer claims them — use a Profile for full isolation.
