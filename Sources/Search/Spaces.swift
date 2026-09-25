@@ -89,6 +89,20 @@ enum Spaces {
         }
     }
 
+    /// Split divider / drop-zone accent — stronger than chrome wash, still soft.
+    static func splitAccent(_ tint: SpaceTint, alpha: CGFloat = 0.45) -> Color {
+        Color(nsColor: NSColor(srgbRed: tint.red, green: tint.green, blue: tint.blue, alpha: alpha))
+    }
+
+    /// Focused pane header wash over Look ground.
+    static func splitHeaderWash(_ tint: SpaceTint, focused: Bool) -> Color {
+        let vivid = tint.vivid
+        let alpha: CGFloat = focused
+            ? (vivid ? 0.22 : 0.14)
+            : (vivid ? 0.08 : 0.045)
+        return Color(nsColor: NSColor(srgbRed: tint.red, green: tint.green, blue: tint.blue, alpha: alpha))
+    }
+
     /// Solid swatch for menus — the full colour, not the wash.
     static func swatchNS(_ tint: SpaceTint) -> NSColor { tint.nsColor }
 

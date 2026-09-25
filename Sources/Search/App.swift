@@ -360,52 +360,7 @@ struct ContentView: View {
 
     @ViewBuilder
     private var stage: some View {
-        if let panes = browser.splitPanes {
-            SplitStage(browser: browser, left: panes.left, right: panes.right)
-                .overlay {
-                    SplitDragOverlay(browser: browser, carry: browser.splitCarry)
-                }
-                .overlay {
-                    if browser.prefs.showsLinks { LinkBubble(status: browser.linkStatus) }
-                }
-                .overlay(alignment: .topTrailing) {
-                    if browser.finding {
-                        FindBar(browser: browser)
-                            .transition(.move(edge: .top).combined(with: .opacity))
-                    }
-                }
-                .overlay(alignment: .topLeading) {
-                    if let asked = browser.suggesting,
-                       asked.tab == panes.left.id || asked.tab == panes.right.id {
-                        AccountList(browser: browser, asked: asked)
-                            .transition(.opacity)
-                    }
-                }
-                .animation(Motion.quick, value: browser.suggesting)
-        } else if let tab = browser.active {
-            Page(tab: tab)
-                .overlay {
-                    SplitDragOverlay(browser: browser, carry: browser.splitCarry)
-                }
-                .overlay {
-                    if browser.prefs.showsLinks { LinkBubble(status: browser.linkStatus) }
-                }
-                .overlay(alignment: .topTrailing) {
-                    if browser.finding {
-                        FindBar(browser: browser)
-                            .transition(.move(edge: .top).combined(with: .opacity))
-                    }
-                }
-                .overlay(alignment: .topLeading) {
-                    if let asked = browser.suggesting, asked.tab == tab.id {
-                        AccountList(browser: browser, asked: asked)
-                            .transition(.opacity)
-                    }
-                }
-                .animation(Motion.quick, value: browser.suggesting)
-        } else {
-            Palette.ground
-        }
+        StageCanvas(browser: browser)
     }
 
     /// What the column and the strip take from the page right now: animated
