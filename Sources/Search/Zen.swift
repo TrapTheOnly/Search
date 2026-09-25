@@ -173,8 +173,14 @@ extension Browser {
     // MARK: - glance
 
     func glance(_ url: URL) {
-        closeGlance()
-        glance = Glance(url: url, browser: self)
+        // Replace without waiting out a previous card's discard delay.
+        if let dying = glance {
+            glance = nil
+            glanceLanding = nil
+            dying.discard()
+        }
+        let next = Glance(url: url, browser: self)
+        withAnimation(Motion.settle) { glance = next }
     }
 
     func glance(_ tab: Tab) {
@@ -186,22 +192,40 @@ extension Browser {
         // Keep the page in the card while it settles out. Tearing the web
         // view down first emptied the stage, then the overlay faded — a
         // blank flash, then a fade, instead of one motion.
+        guard glanceLanding == nil else { return }
         let dying = glance
-        glance = nil
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { dying?.discard() }
+        glanceLanding = nil
+        withAnimation(Motion.quick) { glance = nil }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.22) { dying?.discard() }
     }
 
     func promoteGlance() {
-        guard let url = glance?.address else { return }
-        closeGlance()
-        open(url, foreground: true)
+        guard let url = glance?.address, glanceLanding == nil else { return }
+        withAnimation(Motion.settle) { glanceLanding = .tab }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.24) { [weak self] in
+            guard let self else { return }
+            self.finishGlanceFlight()
+            self.open(url, foreground: true)
+        }
     }
 
     func splitGlance() {
-        guard let url = glance?.address else { return }
-        closeGlance()
-        let tab = open(url, foreground: false)
-        splitAside(tab)
+        guard let url = glance?.address, glanceLanding == nil else { return }
+        withAnimation(Motion.settle) { glanceLanding = .split }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.24) { [weak self] in
+            guard let self else { return }
+            self.finishGlanceFlight()
+            let tab = self.open(url, foreground: false)
+            self.splitAside(tab)
+        }
+    }
+
+    /// Tear down after Open / Split flight — no second close animation.
+    private func finishGlanceFlight() {
+        let dying = glance
+        glance = nil
+        glanceLanding = nil
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { dying?.discard() }
     }
 
     // MARK: - split

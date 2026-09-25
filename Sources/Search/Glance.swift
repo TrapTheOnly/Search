@@ -5,6 +5,12 @@ import WebKit
 // in a tab's menu: one web view, gone when you close it, never written to
 // the session. Only one at a time.
 
+/// Where a glance is flying when Open or Split is pressed.
+enum GlanceLanding: Equatable {
+    case tab
+    case split
+}
+
 @MainActor
 final class Glance: NSObject, ObservableObject, WKNavigationDelegate, WKUIDelegate {
     let web: PageView
@@ -19,6 +25,10 @@ final class Glance: NSObject, ObservableObject, WKNavigationDelegate, WKUIDelega
         let view = PageView(frame: .zero, configuration: Web.configuration())
         view.allowsMagnification = true
         view.allowsBackForwardNavigationGestures = false
+        // System force-press / trackpad peek stays on. Action buttons on that
+        // preview are owned by WebKit/macOS (Open / Reading List / …) — there
+        // is no public AppKit hook to retarget them at Search or Glance.
+        view.allowsLinkPreview = true
         view.holdForFirstFrame()
         if #available(macOS 13.3, *) { view.isInspectable = true }
         self.web = view
@@ -99,17 +109,20 @@ final class Glance: NSObject, ObservableObject, WKNavigationDelegate, WKUIDelega
     }
 }
 
-/// The glance itself: a card over the page, the same white and hairline as
-/// every other thing that rises here, with the three ways out along the top.
+/// The glance itself: glass over the page, Look ground under the web view so
+/// loading never flashes empty, with the three ways out along the top.
 struct GlanceCard: View {
     @ObservedObject var browser: Browser
     @ObservedObject var glance: Glance
 
+    private var landing: GlanceLanding? { browser.glanceLanding }
+
     var body: some View {
         ZStack {
-            Color.black.opacity(0.10)
+            Color.black.opacity(landing == nil ? 0.10 : 0)
                 .ignoresSafeArea()
                 .onTapGesture { browser.closeGlance() }
+                .allowsHitTesting(landing == nil)
 
             VStack(spacing: 0) {
                 HStack(spacing: 10) {
@@ -125,23 +138,74 @@ struct GlanceCard: View {
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
+                .opacity(landing == nil ? 1 : 0)
 
                 Rectangle().fill(Palette.hairline).frame(height: 1)
 
-                WebStage(page: glance.web)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                // Solid Look (and space wash) under the web view — glass chrome
+                // around it, never a see-through hole while the first frame is held.
+                ZStack {
+                    ChromeFill(tint: browser.prefs.usesSpaces ? browser.space.wash : nil)
+                    WebStage(page: glance.web)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             .frame(maxWidth: 820, maxHeight: 560)
-            .background(Palette.ground, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .background { glassChrome }
             .overlay(
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .strokeBorder(Palette.hairline, lineWidth: 1)
+                    .strokeBorder(Palette.hairline.opacity(0.85), lineWidth: 1)
             )
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-            .shadow(color: .black.opacity(0.16), radius: 34, y: 12)
+            .shadow(color: .black.opacity(landing == nil ? 0.16 : 0.04), radius: landing == nil ? 34 : 10, y: landing == nil ? 12 : 4)
             .padding(28)
-            .transition(.scale(scale: 0.97).combined(with: .opacity))
+            .scaleEffect(landingScale, anchor: landingAnchor)
+            .offset(y: landingOffset)
+            .opacity(landing == nil ? 1 : 0)
+            .allowsHitTesting(landing == nil)
+            .transition(.asymmetric(
+                insertion: .scale(scale: 0.96).combined(with: .opacity),
+                removal: .scale(scale: 0.98).combined(with: .opacity)
+            ))
         }
+        .animation(Motion.settle, value: landing)
         .transition(.opacity)
+    }
+
+    /// Glass plate: Look ground, a soft space wash, then a thin material sheen.
+    private var glassChrome: some View {
+        let shape = RoundedRectangle(cornerRadius: 16, style: .continuous)
+        return ZStack {
+            shape.fill(Palette.ground)
+            if browser.prefs.usesSpaces {
+                shape.fill(Spaces.chromeWash(browser.space.wash))
+            }
+            shape.fill(.ultraThinMaterial)
+                .opacity(0.55)
+        }
+    }
+
+    private var landingScale: CGFloat {
+        switch landing {
+        case .tab: return 0.12
+        case .split: return 0.55
+        case nil: return 1
+        }
+    }
+
+    private var landingAnchor: UnitPoint {
+        switch landing {
+        case .tab: return .top
+        case .split: return .trailing
+        case nil: return .center
+        }
+    }
+
+    private var landingOffset: CGFloat {
+        switch landing {
+        case .tab: return -120
+        case .split: return 0
+        case nil: return 0
+        }
     }
 }
