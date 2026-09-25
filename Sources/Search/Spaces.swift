@@ -267,7 +267,7 @@ extension Browser {
         cancelTabEdit()
         if floater.showing { land() }
         endSplit()
-        closeGlance()
+        closePeek()
         tabSwitcher.cancel()
         writeSession(now: true)
 

@@ -53,10 +53,10 @@
                                        folder (open: its first bookmark picked)
     ./bench bookmark URL [new]         test run: a bookmark picked from the list, timed until it loads
                                        (new: into a new tab, whose page isn't built yet)
-    ./bench peek URL|close             test run: the peek panel over the tab in front, as a shift-click opens it
+    ./bench peek URL|close|keep|open   test run: Peek overlay (Option/force/shift); keep/open promotes as tab
     ./bench window                     test run: open the browser's window if a hidden probe came up without it
     ./bench pages on|off               test run: let a hidden probe's pages be painted, off every screen (for picture)
-    ./bench picture PATH [chrome]      test run: the whole window drawn to a PNG (chrome: keep Peek/Glance overlays)
+    ./bench picture PATH [chrome]      test run: the whole window drawn to a PNG (chrome: keep Peek overlays)
     ./bench film peek|unpeek|fold PATH [N] [SECS]  the window drawn N times while it animates → PATH-00.png… — --test runs only
     ./bench ui KEY VALUE               settings/passwords/welcome/history/downloads/bookmarks/hidden on|off,
                                        look light|dark|system, sidebar on|off, spaces on|off, hides on|off,
@@ -64,7 +64,7 @@
     ./bench pin ID                     pin a tab to this space — --test runs only
     ./bench unpin ID                   unpin a tab — --test runs only
     ./bench essential ID [on|off]      make / remove Essential (all spaces) — --test runs only
-    ./bench glance URL|close|open|split [ID]  test run: Glance overlay; open/split promote; close dismisses
+    ./bench glance URL|close|open|split [ID]  alias for peek (Glance removed)
     ./bench split [ID]|end|swap|ratio N|edge left|right [ID]
                                        test run: split aside, end, swap panes, set ratio, or edge-drop
     ./bench folder [new NAME | ID toggle|place [TAB]]  test run: tab folders
@@ -239,8 +239,13 @@ def main(argv):
         if len(args) < 2 or any(a != "shift" for a in args[2:]): sys.exit("usage: bench keyeq CHARS CODE [shift]")
         request["chars"], request["code"], request["mods"] = args[0], int(args[1]), args[2:]
     elif verb == "peek":
-        if len(args) != 1: sys.exit("usage: bench peek URL|close")
-        request["url"] = args[0]
+        if not args: sys.exit("usage: bench peek URL|close|keep|open")
+        if args[0] == "close":
+            request["close"] = True
+        elif args[0] in ("keep", "open"):
+            request["promote"] = "tab"
+        else:
+            request["url"] = args[0]
     elif verb == "pull":
         if len(args) not in (1, 2, 3): sys.exit("usage: bench pull DX [STEPS] [MS]")
         request["dx"] = float(args[0])
@@ -255,17 +260,16 @@ def main(argv):
         if not args or (len(args) == 2 and args[1] != "chrome"):
             sys.exit("usage: bench picture PATH [chrome]")
         request["path"] = os.path.abspath(args[0])
-        # chrome: draw the window as-is (overlays like Peek/Glance stay);
+        # chrome: draw the window as-is (overlays like Peek stay);
         # default stamps the active page over the stage and covers them.
         if len(args) == 2: request["page"] = False
     elif verb == "glance":
+        # Alias: Glance was removed; routes to Peek (open/split both promote).
         if not args: sys.exit("usage: bench glance URL|close|open|split [ID]")
         if args[0] == "close":
             request["close"] = True
-        elif args[0] == "open":
-            request["promote"] = "tab"
-        elif args[0] == "split":
-            request["promote"] = "split"
+        elif args[0] in ("open", "split"):
+            request["promote"] = "tab" if args[0] == "open" else "split"
         else:
             request["url"] = args[0]
             if len(args) == 2: request["id"] = args[1]

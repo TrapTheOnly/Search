@@ -259,30 +259,41 @@ final class Bench {
             if on { browser.makeEssential(tab) } else { browser.removeEssential(tab) }
             answer(describe(tab))
 
-        case "glance":
-            guard Store.testing else { answer(["error": "glance only works on a --test run"]); return }
-            if request["close"] as? Bool == true {
-                browser.closeGlance()
-                answer(["glance": ""])
+        case "glance", "peek":
+            // Peek overlay (Glance was removed — `glance` kept as an alias).
+            // Only on a SEARCH_PROBE run.
+            guard Store.testing else { answer(["error": "\(verb) only works on a --test run"]); return }
+            if request["close"] as? Bool == true || request["url"] as? String == "close" {
+                browser.closePeek()
+                answer(["peek": ""])
                 return
             }
             if let promote = request["promote"] as? String {
                 switch promote {
-                case "tab": browser.promoteGlance()
-                case "split": browser.splitGlance()
-                default: answer(["error": "glance open|split"]); return
+                case "tab", "keep":
+                    browser.keepPeek()
+                    answer(["peek": "", "promoted": "tab"])
+                case "split":
+                    // Split-from-overlay removed with Glance; open as tab instead.
+                    browser.keepPeek()
+                    answer(["peek": "", "promoted": "tab", "note": "split-from-peek removed; kept as tab"])
+                default:
+                    answer(["error": "peek promote tab|keep"])
                 }
-                answer(["glance": "", "promoted": promote])
                 return
             }
-            if let url = (request["url"] as? String).flatMap(Address.url(from:)) {
-                browser.glance(url)
-                answer(["glance": url.absoluteString])
+            if let text = request["url"] as? String, let url = Address.url(from: text) ?? URL(string: text) {
+                if let tab = browser.active {
+                    browser.peek(url, from: tab)
+                } else {
+                    browser.peek(url)
+                }
+                answer(["peek": url.absoluteString])
                 return
             }
             guard let tab = find(request, in: browser) ?? browser.active else { answer(missing(request)); return }
-            browser.glance(tab)
-            answer(["glance": (tab.pending ?? tab.address)?.absoluteString ?? ""])
+            browser.peek(tab)
+            answer(["peek": (tab.pending ?? tab.address)?.absoluteString ?? ""])
 
         case "split":
             guard Store.testing else { answer(["error": "split only works on a --test run"]); return }
@@ -941,21 +952,6 @@ final class Bench {
                     }
                 }
             }
-
-        case "peek":
-            // A link's page in the peek panel over the tab in front, as a
-            // shift-click on it would open it (see Peek.swift); "close" puts
-            // it away. Only on a SEARCH_PROBE run.
-            guard Store.testing else { answer(["error": "peek only works on a --test run"]); return }
-            if request["url"] as? String == "close" {
-                browser.closePeek()
-                answer(["peek": ""])
-                return
-            }
-            guard let tab = browser.active, let text = request["url"] as? String, let url = URL(string: text)
-            else { answer(["error": "peek needs a tab in front and an address"]); return }
-            browser.peek(url, from: tab)
-            answer(["peek": url.absoluteString])
 
         case "pull":
             // Two fingers sideways over the page: DX points in STEPS scroll

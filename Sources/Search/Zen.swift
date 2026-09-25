@@ -1,7 +1,7 @@
 import SwiftUI
 
-// Essentials, folders, glance, and split. Essentials stay profile-wide and
-// sticky across spaces (see TabBar). Folders / glance / split are ported from
+// Essentials, folders, and split. Essentials stay profile-wide and
+// sticky across spaces (see TabBar). Folders / split are ported from
 // feature/light-zen; Essentials persistence stays the sticky cut (first space
 // session only — do not re-write essentials onto every space).
 //
@@ -18,7 +18,7 @@ import SwiftUI
 //   not unload or rebuild them (sticky strip in TabBar; sticky essentials
 //   block above the sidebar swipe in Side).
 // - Ordinary pins and tab folders are **per space**.
-// - Glance is option-click / force-press / menu (Peek.swift remains shift-click).
+// - Peek is option-click / force-press / menu / shift-click (see Peek.swift).
 // - Split shows two strip tabs side by side; not written to the session.
 // - A space with `sharesSignIns == false` ("signed out") isolates cookies /
 //   sign-ins only. Essentials still show there — they are not migrated into
@@ -194,68 +194,10 @@ extension Browser {
         }
     }
 
-    // MARK: - glance
-
-    func glance(_ url: URL) {
-        // Replace without waiting out a previous card's discard delay.
-        if let dying = glance {
-            glance = nil
-            glanceLanding = nil
-            dying.discard()
-        }
-        let next = Glance(url: url, browser: self)
-        withAnimation(Motion.flight) { glance = next }
-    }
-
-    func glance(_ tab: Tab) {
-        guard let url = tab.pending ?? tab.address else { return }
-        glance(url)
-    }
-
-    func closeGlance() {
-        // Keep the page in the card while it settles out. Tearing the web
-        // view down first emptied the stage, then the overlay faded — a
-        // blank flash, then a fade, instead of one motion.
-        guard glanceLanding == nil else { return }
-        let dying = glance
-        glanceLanding = nil
-        withAnimation(Motion.flight) { glance = nil }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.36) { dying?.discard() }
-    }
-
-    func promoteGlance() {
-        guard let url = glance?.address, glanceLanding == nil else { return }
-        withAnimation(Motion.flight) { glanceLanding = .tab }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.34) { [weak self] in
-            guard let self else { return }
-            self.finishGlanceFlight()
-            self.open(url, foreground: true)
-        }
-    }
-
-    func splitGlance() {
-        guard let url = glance?.address, glanceLanding == nil else { return }
-        withAnimation(Motion.flight) { glanceLanding = .split }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.34) { [weak self] in
-            guard let self else { return }
-            self.finishGlanceFlight()
-            let tab = self.open(url, foreground: false)
-            self.splitAside(tab)
-        }
-    }
-
-    /// Tear down after Open / Split flight — no second close animation.
-    private func finishGlanceFlight() {
-        let dying = glance
-        glance = nil
-        glanceLanding = nil
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { dying?.discard() }
-    }
-
     // MARK: - split
 
     func splitAside(_ tab: Tab) {
-        closeGlance()
+        closePeek()
         let mate: Tab
         if tab.id == activeID {
             guard let other = strip.filter({ $0.id != tab.id && !$0.isBlank }).max(by: { $0.touched < $1.touched })
@@ -284,7 +226,7 @@ extension Browser {
 
     /// Open `tab` as a new pane on the given stage edge — always ~50/50, never a sliver.
     func splitOnto(_ edge: SplitEdge, _ tab: Tab) {
-        closeGlance()
+        closePeek()
         guard !tab.isBlank else { return }
         let axis: SplitAxis = edge.isHorizontal ? .horizontal : .vertical
         if let panes = splitPanes {
