@@ -171,14 +171,17 @@ enum Metrics {
     static let splitEdge: CGFloat = 56
     /// Center dead-zone (fraction of stage) before the drop side flips.
     static let splitHysteresis: CGFloat = 0.10
-    /// Pane-swap: travel past this fraction of chrome width before committing.
-    static let splitSwapCommit: CGFloat = 0.62
+    /// Pane-swap: travel past this fraction of chrome width before drop commits.
+    /// Swap never happens mid-hover — only on drop (Zen ownership model).
+    static let splitSwapCommit: CGFloat = 0.45
     /// Quiet chrome band above each pane (expand / close), not a Zen card.
     static let splitChrome: CGFloat = 26
     /// Pull a strip tab this far into the stage to lift the mini-window.
     static let splitLift: CGFloat = 36
     /// Mini-window size while dragging a tab toward a split edge.
     static let splitMini = CGSize(width: 208, height: 128)
+    /// Expand / mate-out flight before clearing split membership.
+    static let splitExpandSettle: TimeInterval = 0.36
 }
 
 // One spring for anything that moves between two places, one for anything that

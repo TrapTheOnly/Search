@@ -1,13 +1,17 @@
 import SwiftUI
 import AppKit
 
-// Zen-like *interaction* for splitting: lift a tab into a mini-window, drag it
-// across the stage, snap to a side, drop. Search chrome (Look wash, no orange
-// floating cards). Carry state lives off Browser's @Published surface so the
-// tab strip does not redraw every pointer move (that was the flicker/overlap).
+// Zen-inspired *interaction* for splitting (see internal/zen-split-study.md):
+// lift a tab into a mini-window, live half-zone under the pointer, commit on drop.
+// Search chrome + space accent wash — not Zen’s floating orange cards.
 //
-// Drop model: one dynamic half-stage zone from pointer side — never four tiny
-// always-on edge bands. Hysteresis around center so the zone does not thrash.
+// Ownership (Zen `_draggingTab`): the carried tab id is fixed for the whole
+// gesture. Mate highlight / drop side update under the pointer; pane swap
+// happens only on drop — never mid-hover. That killed Search’s “swap what’s
+// in hand → thinner forever” rearrange bug.
+//
+// Carry state lives off Browser’s @Published surface so the tab strip does not
+// redraw every pointer move.
 
 /// Stage edge a lifted tab is over — drop opens/replaces that pane.
 enum SplitEdge: Equatable {
@@ -28,10 +32,27 @@ enum SplitEdge: Equatable {
         case .bottom: return .bottom
         }
     }
+
+    /// Mate half when rearranging inside an existing split.
+    static func mate(of side: SplitEdge) -> SplitEdge {
+        switch side {
+        case .leading: return .trailing
+        case .trailing: return .leading
+        case .top: return .bottom
+        case .bottom: return .top
+        }
+    }
 }
 
 enum SplitAxis: Equatable {
     case horizontal, vertical
+}
+
+/// Why the tab is being carried — create a split vs rearrange within one.
+enum SplitCarryKind: Equatable {
+    case create
+    /// Dragging one split member; drop on the other half swaps once.
+    case rearrange(from: SplitEdge)
 }
 
 /// Pointer-driven split drag — observed only by the stage overlay / mini-window.
@@ -43,16 +64,35 @@ final class SplitCarry: ObservableObject {
     /// Cursor in the stage overlay's local space (top-leading origin).
     @Published var point: CGPoint = .zero
     @Published var edge: SplitEdge?
+    @Published var kind: SplitCarryKind = .create
     /// Stage size for side hit-testing (updated by the overlay).
     var stageSize: CGSize = .zero
 
     private var lastEdge: SplitEdge?
 
-    func begin(_ id: Tab.ID) {
+    var isRearranging: Bool {
+        if case .rearrange = kind { return true }
+        return false
+    }
+
+    func begin(_ id: Tab.ID, kind: SplitCarryKind = .create) {
         tabID = id
         lifted = false
         edge = nil
         lastEdge = nil
+        self.kind = kind
+    }
+
+    /// Start a within-split rearrange: identity fixed, mini follows pointer.
+    func beginRearrange(_ id: Tab.ID, from side: SplitEdge, at point: CGPoint) {
+        tabID = id
+        kind = .rearrange(from: side)
+        lifted = true
+        self.point = point
+        lastEdge = nil
+        edge = nil
+        refreshEdge()
+        Haptics.align()
     }
 
     func lift(at point: CGPoint) {
@@ -74,6 +114,7 @@ final class SplitCarry: ObservableObject {
         lifted = false
         edge = nil
         lastEdge = nil
+        kind = .create
         point = .zero
     }
 
@@ -85,6 +126,20 @@ final class SplitCarry: ObservableObject {
             edge = nil
             return
         }
+
+        if case .rearrange(let from) = kind {
+            // Zen center-vs-side: only highlight the mate half when clearly over it.
+            let overMate = isOverMateHalf(from: from, size: size)
+            let mate = SplitEdge.mate(of: from)
+            let next: SplitEdge? = overMate ? mate : nil
+            if next != lastEdge {
+                if next != nil { Haptics.level() }
+                lastEdge = next
+            }
+            edge = next
+            return
+        }
+
         let nx = point.x / size.width
         let ny = point.y / size.height
         let dx = nx - 0.5
@@ -97,7 +152,6 @@ final class SplitCarry: ObservableObject {
 
         let next: SplitEdge
         if let current = lastEdge, current != raw {
-            // Stay on the current side until the pointer clearly commits past mid.
             let committed: Bool = {
                 switch raw {
                 case .leading: return nx < 0.5 - dead
@@ -106,7 +160,6 @@ final class SplitCarry: ObservableObject {
                 case .bottom: return ny > 0.5 + dead
                 }
             }()
-            // Also require the new side's axis to dominate (avoids corner flicker).
             let axisClear: Bool = {
                 switch raw {
                 case .leading, .trailing: return abs(dx) > abs(dy) + dead * 0.5
@@ -124,12 +177,28 @@ final class SplitCarry: ObservableObject {
         }
         edge = next
     }
+
+    private func isOverMateHalf(from: SplitEdge, size: CGSize) -> Bool {
+        let dead = Metrics.splitHysteresis
+        let nx = point.x / size.width
+        let ny = point.y / size.height
+        switch from {
+        case .leading: return nx > 0.5 + dead
+        case .trailing: return nx < 0.5 - dead
+        case .top: return ny > 0.5 + dead
+        case .bottom: return ny < 0.5 - dead
+        }
+    }
 }
 
 /// One dynamic half-stage drop zone + mini-window while a tab is lifted.
 struct SplitDragOverlay: View {
     @ObservedObject var browser: Browser
     @ObservedObject var carry: SplitCarry
+
+    private var tint: SpaceTint {
+        browser.prefs.usesSpaces ? browser.space.wash : SpaceTint(rgb: Spaces.colourRGB[0])
+    }
 
     var body: some View {
         GeometryReader { geo in
@@ -140,7 +209,7 @@ struct SplitDragOverlay: View {
                         .transition(.opacity)
                 }
                 if carry.lifted, let id = carry.tabID, let tab = browser.find(id) {
-                    SplitMiniWindow(tab: tab, edge: carry.edge)
+                    SplitMiniWindow(tab: tab, edge: carry.edge, tint: tint)
                         .position(carry.point)
                         .transition(.scale(scale: 0.92).combined(with: .opacity))
                         .zIndex(20)
@@ -156,20 +225,21 @@ struct SplitDragOverlay: View {
         .allowsHitTesting(false)
     }
 
-    /// ~50% of the stage on the active side — Zen half, Search wash (not four bands).
+    /// ~50% of the stage on the active side — Zen half inset, Search accent wash.
     private func halfZone(edge: SplitEdge, size: CGSize) -> some View {
         let inset: CGFloat = 8
         let w = edge.isHorizontal ? size.width * 0.5 - inset * 1.5 : size.width - inset * 2
         let h = edge.isHorizontal ? size.height - inset * 2 : size.height * 0.5 - inset * 1.5
         return RoundedRectangle(cornerRadius: 14, style: .continuous)
-            .fill(Palette.ink.opacity(0.10))
+            .fill(Spaces.splitAccent(tint, alpha: 0.28))
             .overlay(
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .strokeBorder(Palette.ink.opacity(0.20), lineWidth: 1)
+                    .strokeBorder(Spaces.splitAccent(tint, alpha: 0.55), lineWidth: 1.5)
             )
             .frame(width: max(0, w), height: max(0, h))
             .padding(inset)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: edge.alignment)
+            .animation(Motion.quick, value: edge)
     }
 }
 
@@ -177,6 +247,7 @@ struct SplitDragOverlay: View {
 struct SplitMiniWindow: View {
     @ObservedObject var tab: Tab
     var edge: SplitEdge?
+    var tint: SpaceTint
 
     var body: some View {
         VStack(spacing: 0) {
@@ -190,7 +261,12 @@ struct SplitMiniWindow: View {
             }
             .padding(.horizontal, 10)
             .frame(height: 28)
-            .background(Palette.wash)
+            .background {
+                ZStack {
+                    Palette.wash
+                    Spaces.splitHeaderWash(tint, focused: true)
+                }
+            }
 
             ZStack {
                 Palette.ground
@@ -207,7 +283,7 @@ struct SplitMiniWindow: View {
         .background(Palette.ground, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(Palette.hairline, lineWidth: 1)
+                .strokeBorder(Spaces.splitAccent(tint, alpha: edge == nil ? 0.25 : 0.55), lineWidth: 1)
         )
         .shadow(color: .black.opacity(edge == nil ? 0.18 : 0.26), radius: edge == nil ? 16 : 22, y: 8)
         .scaleEffect(edge == nil ? 1 : 1.03)
