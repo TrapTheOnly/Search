@@ -272,18 +272,16 @@ struct TabBar: View {
         case .pin(let tab), .loose(let tab):
             if let group = browser.splitGroupIDs, group.contains(tab.id) {
                 // Joint strip once, at the first of the pair in strip order.
-                if tab.id == group.first ||
-                    (browser.spaceShownPieces.first(where: { group.contains($0.id) })?.id == tab.id) {
-                    if let panes = browser.splitPanes {
-                        SplitJointStrip(
-                            browser: browser,
-                            left: panes.left,
-                            right: panes.right,
-                            width: width,
-                            room: room,
-                            pill: pill
-                        )
-                    }
+                if browser.spaceShownPieces.first(where: { group.contains($0.id) })?.id == tab.id,
+                   let panes = browser.splitPanes {
+                    SplitJointStrip(
+                        browser: browser,
+                        left: panes.left,
+                        right: panes.right,
+                        width: width,
+                        room: room,
+                        pill: pill
+                    )
                 }
             } else {
                 let step = (tab.pin != nil ? Metrics.pinWidth : width) + Metrics.tabGap
