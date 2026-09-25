@@ -21,7 +21,9 @@ struct Page: View {
             // before and after the float changes nothing SwiftUI can see, so
             // the stage was never told to take it back when it landed, and
             // the tab stayed empty. Nothing, then the page, is a change.
-            WebStage(page: tab.isBlank || tab.asleep || tab.floating ? nil : tab.web)
+            // `peeking`: page lives in the Peek overlay — stage must not claim
+            // the same WKWebView (two StageViews fighting is a blank page).
+            WebStage(page: tab.isBlank || tab.asleep || tab.floating || tab.peeking ? nil : tab.web)
 
             if let cover = tab.cover {
                 // The page as it was left, while it is rebuilt underneath —

@@ -1021,7 +1021,7 @@ struct TabMenu: View {
             Button("Reset Pin") { browser.resetPin(tab) }
                 .disabled(tab.pinURL == nil)
         }
-        Button("Glance") { browser.glance(tab) }
+        Button("Peek") { browser.peek(tab) }
             .disabled(tab.isBlank)
         Button(browser.splitID == nil ? "Split to the Side" : "End Split") {
             if browser.splitID == nil { browser.splitAside(tab) } else { browser.endSplit() }

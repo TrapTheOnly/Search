@@ -248,6 +248,10 @@ final class Tab: ObservableObject, Identifiable {
     /// True while this tab's page is out in the little window.
     @Published var floating = false
 
+    /// True while this tab's page is in the Peek overlay. The main stage must
+    /// not claim the web view until Peek releases it (see Peek.keepPeek).
+    @Published var peeking = false
+
     /// A sideways swipe in progress, for the disc that shows it.
     @Published var pull: Pull?
 
@@ -322,7 +326,7 @@ final class Tab: ObservableObject, Identifiable {
     /// The middle button was let go over a link. The browser opens it in a
     /// tab of its own beside this one, without leaving the page you are on.
     var onMiddleClick: ((Tab, URL) -> Void)?
-    /// Force-press / trackpad hard-press on a link. Opens Glance, same as
+    /// Force-press / trackpad hard-press on a link. Opens Peek, same as
     /// Option-click — not WebKit's Quick Look / Reading List preview.
     var onForceLink: ((URL) -> Void)?
     /// Sent where this tab's view can't go: from an extension's page to the
@@ -436,7 +440,7 @@ final class Tab: ObservableObject, Identifiable {
         // PageView, and it moves nothing but a disc.
         web.allowsBackForwardNavigationGestures = false
         // Force-press stays on so WebKit's trackpad hit-test runs; PageView
-        // replaces the system Quick Look / Reading List preview with Glance
+        // replaces the system Quick Look / Reading List preview with Peek
         // (see PageView._immediateActionAnimationController…).
         web.allowsLinkPreview = true
         web.onPull = { [weak self] pull in self?.pull = pull }
@@ -1224,11 +1228,11 @@ final class MiddleRelay: NSObject, WKScriptMessageHandler {
     }
 }
 
-/// Force-press on a link → Glance. Conforms at runtime to AppKit's private
+/// Force-press on a link → Peek. Conforms at runtime to AppKit's private
 /// `NSImmediateActionAnimationController` so WebKit accepts it in place of
 /// Quick Look. Opens on will-begin (when the hard-press commits), not on
 /// hit-test alone — a light press that never deep-clicks stays silent.
-private final class GlanceForceAction: NSObject {
+private final class PeekForceAction: NSObject {
     private let url: URL
     private let open: (URL) -> Void
     private var opened = false
@@ -1255,7 +1259,7 @@ private final class GlanceForceAction: NSObject {
         }
         claimed = true
         guard let proto = NSProtocolFromString("NSImmediateActionAnimationController") else { return false }
-        _ = class_addProtocol(GlanceForceAction.self, proto)
+        _ = class_addProtocol(PeekForceAction.self, proto)
         return true
     }
 
@@ -1340,7 +1344,7 @@ final class PageView: WKWebView {
     /// Told the moment the page is reached for — a click, a scroll — so the
     /// picture of a tab waking up never stands between you and the page.
     var onTouch: (() -> Void)?
-    /// Force-press landed on an http(s) link. Browser opens Glance; system
+    /// Force-press landed on an http(s) link. Browser opens Peek; system
     /// Quick Look / Reading List is suppressed (see SPI override below).
     var onForceLink: ((URL) -> Void)?
 
@@ -1350,11 +1354,11 @@ final class PageView: WKWebView {
     }
 
     /// WebKit asks before showing its force-press preview. For an http(s)
-    /// link we hand back a controller that opens Glance and never the
+    /// link we hand back a controller that opens Peek and never the
     /// system Quick Look / "Open with…" sheet. Returning `nil` keeps the
     /// default (dictionary lookup, data detectors). `NSNull` would cancel
     /// the gesture entirely — wrong here, because we still want the press
-    /// to commit into Glance. SPI; the public preview delegates are iOS-only.
+    /// to commit into Peek. SPI; the public preview delegates are iOS-only.
     @objc(_immediateActionAnimationControllerForHitTestResult:withType:userData:)
     func immediateActionAnimationController(
         for hitTestResult: Any,
@@ -1369,10 +1373,10 @@ final class PageView: WKWebView {
         // No callback: still kill Quick Look so force-press never shows
         // Reading List / "Open with…".
         guard let open = onForceLink else { return NSNull() }
-        // Prefer a real animation controller so Glance opens when the hard
+        // Prefer a real animation controller so Peek opens when the hard
         // press commits (will-begin), not on a light press that never deep-clicks.
-        if GlanceForceAction.canAnimate {
-            return GlanceForceAction(url: url, open: open)
+        if PeekForceAction.canAnimate {
+            return PeekForceAction(url: url, open: open)
         }
         open(url)
         return NSNull()

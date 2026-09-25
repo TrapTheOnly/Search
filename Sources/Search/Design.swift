@@ -184,11 +184,11 @@ enum Motion {
     static let glide = Animation.spring(response: 0.34, dampingFraction: 0.82)
     static let settle = Animation.spring(response: 0.30, dampingFraction: 0.86)
     static let quick = Animation.easeOut(duration: 0.14)
-    /// Glance / split flight — a touch longer so scale+fade read as one motion.
+    /// Split flight — a touch longer so scale+fade read as one motion.
     static let flight = Animation.spring(response: 0.38, dampingFraction: 0.86)
 }
 
-/// Trackpad taps for commit gestures (edge snap, force-press Glance, …).
+/// Trackpad taps for commit gestures (edge snap, force-press Peek, …).
 enum Haptics {
     static func align() {
         NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)

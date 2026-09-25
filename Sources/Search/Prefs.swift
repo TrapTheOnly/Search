@@ -145,8 +145,14 @@ final class Preferences: ObservableObject {
     }
     /// Where a link goes, at the bottom of the page while the pointer is on
     /// it (see StatusLine.swift). Off unless asked for.
-    /// Shift-click on a link opens it in a panel over the page (see
-    /// Peek.swift). Off unless asked for.
+    @Published var showsLinks: Bool {
+        didSet {
+            store.set(showsLinks, forKey: "links.show")
+            HoveredLink.on = showsLinks
+        }
+    }
+    /// Shift-click on a link opens Peek (see Peek.swift). Option-click and
+    /// force-press always peek. Off for shift-click unless asked for.
     @Published var peeksLinks: Bool {
         didSet { store.set(peeksLinks, forKey: "links.peek") }
     }
@@ -154,12 +160,6 @@ final class Preferences: ObservableObject {
     /// unless asked for.
     @Published var bookmarksBar: Bool {
         didSet { store.set(bookmarksBar, forKey: "bookmarks.bar") }
-    }
-    @Published var showsLinks: Bool {
-        didSet {
-            store.set(showsLinks, forKey: "links.show")
-            HoveredLink.on = showsLinks
-        }
     }
     /// Two fingers flick the floating video to a corner (see Float.swift).
     /// Off unless asked for.

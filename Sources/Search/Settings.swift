@@ -208,7 +208,7 @@ struct SettingsPanel: View {
                 Switch(on: $prefs.autocorrect)
             }
             Rule()
-            Line("Peek at a link with a shift-click", "Its page opens in a panel over the one you're reading. Escape puts it away; the other button keeps it as a tab") {
+            Line("Shift-click opens Peek", "Option-click and force-press always peek a link. When this is on, shift-click does too. Escape puts it away; promote keeps the same page as a tab — no reload") {
                 Switch(on: $prefs.peeksLinks)
             }
             Rule()

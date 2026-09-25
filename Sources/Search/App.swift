@@ -136,7 +136,7 @@ struct SearchApp: App {
                         Button("Reset Pin") { browser.resetPin(tab) }
                             .disabled(tab.pinURL == nil)
                     }
-                    Button("Glance") { browser.glance(tab) }
+                    Button("Peek") { browser.peek(tab) }
                         .disabled(tab.isBlank)
                     Button(browser.splitID == nil ? "Split to the Side" : "End Split") {
                         if browser.splitID == nil { browser.splitAside(tab) } else { browser.endSplit() }
@@ -544,11 +544,6 @@ struct ContentView: View {
                     // the title bar's band is page too.
                     .ignoresSafeArea()
             }
-            .overlay {
-                if let glance = browser.glance {
-                    GlanceCard(browser: browser, glance: glance)
-                }
-            }
             .overlay { TabSwitcherOverlay(browser: browser, switcher: browser.tabSwitcher) }
             .overlay { field }
             .overlay { panels }
@@ -556,9 +551,6 @@ struct ContentView: View {
             // is pressed the page is on its way, and the field is not what
             // there is to watch.
             .animation(browser.fieldShowing ? Motion.settle : Motion.quick, value: browser.fieldShowing)
-            // Glance open and close both on flight — no hard pop either way.
-            .animation(Motion.flight, value: browser.glance != nil)
-            .animation(Motion.flight, value: browser.glanceLanding)
             .animation(Motion.settle, value: browser.peekLanding)
             .background(WindowSetup { window = $0; dress($0) })
             .onChange(of: browser.prefs.sidebar) { _, _ in
@@ -939,10 +931,6 @@ struct ContentView: View {
                 browser.closePeek()
                 return true
             }
-            if browser.glance != nil {
-                browser.closeGlance()
-                return true
-            }
             if browser.splitID != nil {
                 browser.endSplit()
                 return true
@@ -1136,8 +1124,6 @@ struct ContentView: View {
         case "w" where !shifted:
             if browser.peekTab != nil {
                 browser.closePeek()
-            } else if browser.glance != nil {
-                browser.closeGlance()
             } else if browser.splitID != nil {
                 browser.endSplit()
             } else if let tab = browser.active {
@@ -1175,6 +1161,6 @@ struct ContentView: View {
             !browser.bookmarksOpen && !browser.veiling && !browser.summoning &&
             browser.editingTab == nil && browser.asking == nil &&
             browser.offering == nil && browser.suggesting == nil &&
-            browser.glance == nil && browser.peekTab == nil
+            browser.peekTab == nil
     }
 }

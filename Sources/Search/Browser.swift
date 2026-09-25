@@ -185,9 +185,6 @@ final class Browser: NSObject, ObservableObject {
     /// Named groups in this space's strip (folders are per-space).
     @Published var folders: [TabFolder] = []
 
-    /// Option-click / menu glance: a short-lived page over this one.
-    @Published var glance: Glance?
-
     /// The other pane when two tabs are split side by side (non-focused mate).
     /// Physical left/right live in `splitLeftID` / `splitRightID`.
     @Published var splitID: Tab.ID?
@@ -843,10 +840,8 @@ final class Browser: NSObject, ObservableObject {
     @Published var makingSpace = false
     /// A link's page, peeked at over this one (see Peek.swift).
     @Published var peekTab: Tab?
-    /// Keep-as-tab: the panel is mid-flight toward the strip.
+    /// Keep-as-tab: the panel is mid-flight into the stage.
     @Published var peekLanding = false
-    /// Glance Open / Split: the card is mid-flight (see Glance.swift).
-    @Published var glanceLanding: GlanceLanding?
     /// Which way the last change of space went: 1 to the next, -1 back.
     @Published var spaceStep = 1
 
@@ -1214,8 +1209,9 @@ final class Browser: NSObject, ObservableObject {
     }
 
     func select(_ tab: Tab) {
-        // A peek is over the tab it was opened from; another tab puts it away.
-        if peekTab != nil, tab.id != activeID { closePeek() }
+        // A peek is over the tab it was opened from; selecting another tab
+        // puts it away. Selecting the peek tab itself (promote) does not.
+        if let peek = peekTab, tab.id != peek.id { closePeek() }
         cancelTabEdit()
         summoning = false
         suggesting = nil
@@ -1817,9 +1813,9 @@ final class Browser: NSObject, ObservableObject {
         // it does in every other browser (see MiddleRelay).
         // From a private tab, the new one is private too, as for ⌘-click.
         tab.onMiddleClick = { [weak self] tab, url in self?.open(url, foreground: false, from: tab) }
-        // Force-press / trackpad hard-press on a link: Glance, same as Option-click.
+        // Force-press / trackpad hard-press on a link: Peek, same as Option-click.
         // System Quick Look / Reading List is replaced in PageView.
-        tab.onForceLink = { [weak self] url in self?.glance(url) }
+        tab.onForceLink = { [weak self] url in self?.peek(url) }
         tab.onCross = { [weak self] tab, url in self?.replace(tab, going: url) }
 
         // The caret in a sign-in box: the accounts kept for this site hang
@@ -2187,21 +2183,26 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
         if prefs.peeksLinks, action.navigationType == .linkActivated,
            ["http", "https"].contains(scheme),
            action.modifierFlags.intersection([.shift, .command, .option, .control]) == .shift,
-           let from = tab(for: webView), peekTab == nil {
+           let from = tab(for: webView), peekTab == nil || from.id == peekTab?.id {
             decisionHandler(.cancel)
             DispatchQueue.main.async { [weak self] in self?.peek(url, from: from) }
             return
         }
-        // Option-click or force-press: glance at the link over this page
-        // (see Glance.swift). Distinct from Peek (shift-click) and from
-        // ⌘-click (new tab). Force-press is routed in PageView so WebKit's
-        // Quick Look / Reading List preview never appears.
+        // Option-click: Peek at the link over this page (same overlay as
+        // force-press and the tab menu). Distinct from ⌘-click (new tab).
         if action.navigationType == .linkActivated,
            ["http", "https"].contains(scheme),
            action.modifierFlags.contains(.option),
            !action.modifierFlags.contains(.command) {
             decisionHandler(.cancel)
-            DispatchQueue.main.async { [weak self] in self?.glance(url) }
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                if let from = self.tab(for: webView) {
+                    self.peek(url, from: from)
+                } else {
+                    self.peek(url)
+                }
+            }
             return
         }
         if action.navigationType == .linkActivated,
@@ -2501,7 +2502,8 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
     }
 
     func tab(for webView: WKWebView) -> Tab? {
-        strip.first { $0.built === webView } ?? parkedTabs.first { $0.built === webView }
+        if let peek = peekTab, peek.built === webView { return peek }
+        return strip.first { $0.built === webView } ?? parkedTabs.first { $0.built === webView }
     }
 
     /// Tear the current profile's tabs down without filing them as recently
