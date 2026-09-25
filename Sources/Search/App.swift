@@ -130,12 +130,26 @@ struct SearchApp: App {
                         Button("Make Essential (All Spaces)") { browser.makeEssential(tab) }
                             .disabled(tab.isBlank)
                     }
+                    if tab.pin != nil || tab.essential {
+                        Button("Replace URL with Current Page") { browser.replacePinURL(tab) }
+                            .disabled(tab.isBlank || (tab.pending ?? tab.address) == nil)
+                        Button("Reset Pin") { browser.resetPin(tab) }
+                            .disabled(tab.pinURL == nil)
+                    }
                     Button("Glance") { browser.glance(tab) }
                         .disabled(tab.isBlank)
                     Button(browser.splitID == nil ? "Split to the Side" : "End Split") {
                         if browser.splitID == nil { browser.splitAside(tab) } else { browser.endSplit() }
                     }
                     .disabled(tab.isBlank && browser.splitID == nil)
+                    if browser.prefs.usesSpaces {
+                        Menu("Move to Space") {
+                            ForEach(browser.spaces) { space in
+                                Button(space.name) { browser.move(tab, toSpace: space.id) }
+                                    .disabled(space.id == browser.spaceID || tab.essential)
+                            }
+                        }
+                    }
                 }
                 Button("Rename Tab") { if let tab = browser.active { browser.beginTabRename(tab) } }
                     .disabled(browser.active == nil)

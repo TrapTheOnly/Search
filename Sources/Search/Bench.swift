@@ -1441,6 +1441,7 @@ final class Bench {
             "noisy": tab.noisy,
             "muted": tab.muted,
             "pin": tab.pin ?? "",
+            "pinURL": tab.pinURL?.absoluteString ?? "",
             "essential": tab.essential,
             "extensions": { if #available(macOS 15.4, *) { return tab.carriesExtensions } else { return false } }(),
         ]
