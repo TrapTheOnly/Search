@@ -697,9 +697,10 @@ struct SplitStage: View {
             Rectangle()
                 .fill(Palette.hairline)
                 .frame(width: 1)
-            RoundedRectangle(cornerRadius: 1, style: .continuous)
-                .fill(Palette.ink.opacity(hoveringHandle || grabbingHandle ? 0.28 : 0))
-                .frame(width: 3, height: 36)
+            // Quiet persistent grip — thickens under the pointer, never a Zen bar.
+            Capsule()
+                .fill(Palette.ink.opacity(hoveringHandle || grabbingHandle ? 0.35 : 0.14))
+                .frame(width: hoveringHandle || grabbingHandle ? 3 : 2, height: hoveringHandle || grabbingHandle ? 40 : 28)
         }
         .frame(maxHeight: .infinity)
         .contentShape(Rectangle())
@@ -895,14 +896,7 @@ struct SplitJointStrip: View {
             .padding(.leading, 2)
         }
         .padding(3)
-        .background(
-            RoundedRectangle(cornerRadius: 11, style: .continuous)
-                .fill(Palette.wash.opacity(0.55))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 11, style: .continuous)
-                .strokeBorder(Palette.hairline, lineWidth: 1)
-        )
+        .background(Palette.wash.opacity(0.55), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
         .animation(Motion.glide, value: browser.splitLeftID)
     }
 
@@ -920,20 +914,15 @@ struct SplitJointStrip: View {
                     withAnimation(Motion.settle) { browser.endSplit() }
                 }
             }
-            .padding(.horizontal, 6)
+            .padding(.horizontal, 4)
             .padding(.top, 2)
             memberRow(left, trailing: false)
             memberRow(right, trailing: true)
         }
-        .padding(4)
-        .background(
-            RoundedRectangle(cornerRadius: 11, style: .continuous)
-                .fill(Palette.wash.opacity(0.45))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 11, style: .continuous)
-                .strokeBorder(Palette.hairline, lineWidth: 1)
-        )
+        .padding(.vertical, 4)
+        .padding(.horizontal, 2)
+        // Flat joint — wash only, no card stroke (Search chrome, not Zen).
+        .background(Palette.wash.opacity(0.4), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 
     @ViewBuilder
