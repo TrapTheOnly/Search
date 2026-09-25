@@ -532,7 +532,10 @@ struct ContentView: View {
             // is pressed the page is on its way, and the field is not what
             // there is to watch.
             .animation(browser.fieldShowing ? Motion.settle : Motion.quick, value: browser.fieldShowing)
-            .animation(Motion.settle, value: browser.glance != nil)
+            // Glance opens on settle, closes on quick — same asymmetry as the field.
+            .animation(browser.glance != nil ? Motion.settle : Motion.quick, value: browser.glance != nil)
+            .animation(Motion.settle, value: browser.glanceLanding)
+            .animation(Motion.settle, value: browser.peekLanding)
             .background(WindowSetup { window = $0; dress($0) })
             .onChange(of: browser.prefs.sidebar) { _, _ in
                 DispatchQueue.main.async { measureLights() }

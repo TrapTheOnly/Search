@@ -812,6 +812,10 @@ final class Browser: NSObject, ObservableObject {
     @Published var makingSpace = false
     /// A link's page, peeked at over this one (see Peek.swift).
     @Published var peekTab: Tab?
+    /// Keep-as-tab: the panel is mid-flight toward the strip.
+    @Published var peekLanding = false
+    /// Glance Open / Split: the card is mid-flight (see Glance.swift).
+    @Published var glanceLanding: GlanceLanding?
     /// Which way the last change of space went: 1 to the next, -1 back.
     @Published var spaceStep = 1
 

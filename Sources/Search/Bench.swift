@@ -266,6 +266,15 @@ final class Bench {
                 answer(["glance": ""])
                 return
             }
+            if let promote = request["promote"] as? String {
+                switch promote {
+                case "tab": browser.promoteGlance()
+                case "split": browser.splitGlance()
+                default: answer(["error": "glance open|split"]); return
+                }
+                answer(["glance": "", "promoted": promote])
+                return
+            }
             if let url = (request["url"] as? String).flatMap(Address.url(from:)) {
                 browser.glance(url)
                 answer(["glance": url.absoluteString])

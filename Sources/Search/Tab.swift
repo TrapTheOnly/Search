@@ -427,6 +427,10 @@ final class Tab: ObservableObject, Identifiable {
         // the window with a picture of the last one behind it; ours is in
         // PageView, and it moves nothing but a disc.
         web.allowsBackForwardNavigationGestures = false
+        // Force-press / trackpad link preview: system UI. Preview action
+        // buttons (Open, Reading List, …) are not customisable on macOS —
+        // WKUIDelegate preview hooks are iOS-only.
+        web.allowsLinkPreview = true
         web.onPull = { [weak self] pull in self?.pull = pull }
         web.onTouch = { [weak self] in self?.uncover() }
         web.searchName = { [weak self] in self?.searchName?() }

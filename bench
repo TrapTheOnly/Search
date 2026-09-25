@@ -56,7 +56,7 @@
     ./bench peek URL|close             test run: the peek panel over the tab in front, as a shift-click opens it
     ./bench window                     test run: open the browser's window if a hidden probe came up without it
     ./bench pages on|off               test run: let a hidden probe's pages be painted, off every screen (for picture)
-    ./bench picture PATH               test run: the whole window, pages included, drawn to a PNG (start the probe hidden)
+    ./bench picture PATH [chrome]      test run: the whole window drawn to a PNG (chrome: keep Peek/Glance overlays)
     ./bench film peek|unpeek|fold PATH [N] [SECS]  the window drawn N times while it animates → PATH-00.png… — --test runs only
     ./bench ui KEY VALUE               settings/passwords/welcome/history/downloads/bookmarks/hidden on|off,
                                        look light|dark|system, sidebar on|off, spaces on|off, hides on|off,
@@ -64,6 +64,9 @@
     ./bench pin ID                     pin a tab to this space — --test runs only
     ./bench unpin ID                   unpin a tab — --test runs only
     ./bench essential ID [on|off]      make / remove Essential (all spaces) — --test runs only
+    ./bench glance URL|close|open|split [ID]  test run: Glance overlay; open/split promote; close dismisses
+    ./bench split [ID]|end             test run: split the tab aside, or end split
+    ./bench folder [new NAME | ID toggle|place [TAB]]  test run: tab folders
 
 Needs Settings › General › "Let a script drive Search" switched on in the
 running app. IDs are the first characters of a tab's id, as `tabs` prints
@@ -248,8 +251,41 @@ def main(argv):
         if len(args) != 1 or args[0] not in ("on", "off"): sys.exit("usage: bench pages on|off")
         request["on"] = args[0] == "on"
     elif verb == "picture":
-        if len(args) != 1: sys.exit("usage: bench picture PATH")
+        if not args or (len(args) == 2 and args[1] != "chrome"):
+            sys.exit("usage: bench picture PATH [chrome]")
         request["path"] = os.path.abspath(args[0])
+        # chrome: draw the window as-is (overlays like Peek/Glance stay);
+        # default stamps the active page over the stage and covers them.
+        if len(args) == 2: request["page"] = False
+    elif verb == "glance":
+        if not args: sys.exit("usage: bench glance URL|close|open|split [ID]")
+        if args[0] == "close":
+            request["close"] = True
+        elif args[0] == "open":
+            request["promote"] = "tab"
+        elif args[0] == "split":
+            request["promote"] = "split"
+        else:
+            request["url"] = args[0]
+            if len(args) == 2: request["id"] = args[1]
+    elif verb == "split":
+        if args == ["end"] or args == ["close"]:
+            request["end"] = True
+        elif len(args) == 1:
+            request["id"] = args[0]
+        elif args:
+            sys.exit("usage: bench split [ID]|end")
+    elif verb == "folder":
+        if args and args[0] == "new":
+            request["new"] = " ".join(args[1:]) or "Folder"
+            # optional id via trailing — keep simple: active tab
+        elif len(args) >= 2 and args[1] in ("toggle", "place"):
+            request["folder"], request["action"] = args[0], args[1]
+            if args[1] == "place" and len(args) == 3: request["id"] = args[2]
+        elif not args:
+            pass
+        else:
+            sys.exit("usage: bench folder [new NAME | FOLDER_ID toggle|place [TAB]]")
     elif verb == "film":
         if len(args) not in (2, 3, 4) or args[0] not in ("peek", "unpeek", "fold", "none"):
             sys.exit("usage: bench film peek|unpeek|fold|none PATH [FRAMES] [EVERY]")
