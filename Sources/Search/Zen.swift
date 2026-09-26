@@ -87,6 +87,30 @@ extension Browser {
         tab.id == splitLeftID || tab.id == splitRightID
     }
 
+    /// Raw membership is set — do not require `find` (unlike `splitPanes`).
+    var isSplitActive: Bool {
+        guard let left = splitLeftID, let right = splitRightID else { return false }
+        return left != right
+    }
+
+    /// End the split when `tab` is outside the pair; keep remapping between panes.
+    /// Used by every focus path that should leave Split (sidebar, strip, ⌘N,
+    /// Option+Tab → `select`, etc.) without touching pane-to-pane focus.
+    func leaveSplitUnlessMember(_ tab: Tab) {
+        guard isSplitActive else {
+            if splitID != nil || splitLeftID != nil || splitRightID != nil { endSplit() }
+            return
+        }
+        if isSplitMember(tab) {
+            // Keep physical left/right; only remapping the mate pointer so focus
+            // and splitID stay distinct. Pane order is splitLeftID / splitRightID.
+            if splitID == tab.id { splitID = activeID }
+            syncSplitMate()
+        } else {
+            withAnimation(Motion.settle) { endSplit() }
+        }
+    }
+
     var spacePins: Int { tabs.filter { $0.pin != nil && !$0.essential }.count }
 
     var pieces: [StripPiece] {
@@ -199,6 +223,17 @@ extension Browser {
 
     func splitAside(_ tab: Tab) {
         closePeek()
+        // Already split: focus a member; never silently remap the pair onto a
+        // non-member (that looked like "select outside keeps Split"). Use
+        // `splitOnto` / edge-drop to replace a pane deliberately.
+        if isSplitActive {
+            if isSplitMember(tab) {
+                select(tab)
+            }
+            // Non-member while already split: do not remap. Edge-drop / splitOnto
+            // replaces a pane deliberately; bare Split Aside is a no-op here.
+            return
+        }
         let mate: Tab
         if tab.id == activeID {
             guard let other = strip.filter({ $0.id != tab.id && !$0.isBlank }).max(by: { $0.touched < $1.touched })
@@ -412,8 +447,10 @@ extension Browser {
     }
 
     /// Keep `splitID` as the non-focused member of the pair.
+    /// If focus has left the pair without going through `select`, clear Split
+    /// rather than leaving a stale membership that remaps on the next probe.
     func syncSplitMate() {
-        guard let left = splitLeftID, let right = splitRightID else {
+        guard let left = splitLeftID, let right = splitRightID, left != right else {
             splitID = nil
             return
         }
@@ -421,6 +458,8 @@ extension Browser {
             splitID = right
         } else if activeID == right {
             splitID = left
+        } else if activeID != nil {
+            endSplit()
         } else {
             splitID = right
         }

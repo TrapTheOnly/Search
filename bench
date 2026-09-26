@@ -66,7 +66,7 @@
     ./bench essential ID [on|off]      make / remove Essential (all spaces) — --test runs only
     ./bench glance URL|close|open|split [ID]  alias for peek (Glance removed)
     ./bench split [ID]|end|swap|ratio N|edge left|right [ID]
-                                       test run: split aside, end, swap panes, set ratio, or edge-drop
+                                       test run: bare split = status only; ID creates; end/swap/ratio/edge-drop
     ./bench folder [new NAME | ID toggle|place [TAB]]  test run: tab folders
 
 Needs Settings › General › "Let a script drive Search" switched on in the
@@ -286,7 +286,7 @@ def main(argv):
         elif len(args) == 1:
             request["id"] = args[0]
         elif args:
-            sys.exit("usage: bench split [ID]|end|swap|ratio N|edge left|right|top|bottom [ID]")
+            sys.exit("usage: bench split [ID]|end|swap|ratio N|edge left|right|top|bottom [ID]  (bare = status)")
     elif verb == "folder":
         if args and args[0] == "new":
             request["new"] = " ".join(args[1:]) or "Folder"

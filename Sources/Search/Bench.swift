@@ -304,12 +304,7 @@ final class Bench {
             }
             if request["swap"] as? Bool == true {
                 browser.swapSplit()
-                answer([
-                    "split": browser.splitID?.uuidString ?? "",
-                    "left": browser.splitLeftID?.uuidString ?? "",
-                    "right": browser.splitRightID?.uuidString ?? "",
-                    "ratio": browser.splitRatio,
-                ])
+                answer(splitStatus())
                 return
             }
             if let ratio = request["ratio"] as? Double {
@@ -329,24 +324,28 @@ final class Bench {
                     }
                 }()
                 browser.splitOnto(side, tab)
-                answer([
-                    "split": browser.splitID?.uuidString ?? "",
-                    "left": browser.splitLeftID?.uuidString ?? "",
-                    "right": browser.splitRightID?.uuidString ?? "",
-                    "ratio": browser.splitRatio,
-                    "axis": browser.splitAxis == .horizontal ? "horizontal" : "vertical",
-                ])
+                var out = splitStatus()
+                out["axis"] = browser.splitAxis == .horizontal ? "horizontal" : "vertical"
+                answer(out)
                 return
             }
-            guard let tab = find(request, in: browser) ?? browser.active else { answer(missing(request)); return }
+            // No id / flags → read-only status. A bare `split` used to call
+            // `splitAside(active)`, which remapped the pair onto the focused
+            // tab + most-recent other and made "select outside leaves Split"
+            // look broken under Live QA.
+            guard request["id"] != nil else {
+                answer(splitStatus())
+                return
+            }
+            guard let tab = find(request, in: browser) else { answer(missing(request)); return }
+            if browser.isSplitActive {
+                answer(splitStatus().merging([
+                    "error": "already split — use split end, or split edge left|right ID to replace a pane",
+                ]) { _, new in new })
+                return
+            }
             browser.splitAside(tab)
-            answer([
-                "split": browser.splitID?.uuidString ?? "",
-                "active": browser.activeID?.uuidString ?? "",
-                "left": browser.splitLeftID?.uuidString ?? "",
-                "right": browser.splitRightID?.uuidString ?? "",
-                "ratio": browser.splitRatio,
-            ])
+            answer(splitStatus())
 
         case "folder":
             guard Store.testing else { answer(["error": "folder only works on a --test run"]); return }
@@ -594,6 +593,11 @@ final class Bench {
             }
             out["passkeyAsks"] = Passkeys.asked
             out["passkeyLast"] = Passkeys.last
+            out["active"] = browser.activeID?.uuidString ?? ""
+            out["split"] = browser.splitID?.uuidString ?? ""
+            out["splitLeft"] = browser.splitLeftID?.uuidString ?? ""
+            out["splitRight"] = browser.splitRightID?.uuidString ?? ""
+            out["splitRatio"] = browser.splitRatio
             answer(out)
 
         case "press":
@@ -1562,6 +1566,17 @@ final class Bench {
 
     private func missing(_ request: [String: Any]) -> [String: Any] {
         ["error": "no tab “\(request["id"] as? String ?? "")” — see tabs"]
+    }
+
+    /// Read-only snapshot of split membership — never mutates.
+    private func splitStatus() -> [String: Any] {
+        [
+            "split": browser?.splitID?.uuidString ?? "",
+            "active": browser?.activeID?.uuidString ?? "",
+            "left": browser?.splitLeftID?.uuidString ?? "",
+            "right": browser?.splitRightID?.uuidString ?? "",
+            "ratio": browser?.splitRatio ?? 0.5,
+        ]
     }
 
     private func describe(_ tab: Tab) -> [String: Any] {
