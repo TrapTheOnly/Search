@@ -81,21 +81,23 @@ enum SiteCardPanel {
         }
         let host = FirstClick(rootView: AnyView(card.fixedSize()))
         let size = host.fittingSize
-        // Clip in a plain NSView: NSVisualEffectView's own masksToBounds does
-        // not reliably hide the hosting view's opaque white rectangle, which
-        // showed as a sharp corner behind the rounded menu.
+        // Clip in a plain NSView + mask the material: NSVisualEffectView draws
+        // past layer cornerRadius, and NSHostingView's opaque white then shows
+        // as a sharp rectangle behind the rounded menu.
         let clip = NSView(frame: NSRect(origin: .zero, size: size))
         clip.wantsLayer = true
         clip.layer?.cornerRadius = 12
         clip.layer?.cornerCurve = .continuous
         clip.layer?.masksToBounds = true
         clip.layer?.backgroundColor = NSColor.clear.cgColor
+        applyRoundMask(to: clip, radius: 12)
 
         let glass = NSVisualEffectView(frame: clip.bounds)
         glass.material = .popover
         glass.state = .active
         glass.autoresizingMask = [.width, .height]
         glass.wantsLayer = true
+        glass.maskImage = roundedMask(size: size, radius: 12)
         host.frame = glass.bounds
         host.autoresizingMask = [.width, .height]
         glass.addSubview(host)
@@ -118,18 +120,36 @@ enum SiteCardPanel {
         panel.setFrameOrigin(origin)
         window.addChildWindow(panel, ordered: .above)
         // Its height follows the card: one step in on the connection is taller.
-        host.onResize = { [weak panel, weak clip] fitted in
+        host.onResize = { [weak panel, weak clip, weak glass] fitted in
             guard let panel, fitted.height > 0 else { return }
             var frame = panel.frame
             frame.origin.y += frame.height - fitted.height
             frame.size = fitted
             panel.setFrame(frame, display: true)
             clip?.frame = NSRect(origin: .zero, size: fitted)
+            if let clip { applyRoundMask(to: clip, radius: 12) }
+            glass?.maskImage = roundedMask(size: fitted, radius: 12)
         }
         self.panel = panel
         resign = NotificationCenter.default.addObserver(forName: NSApplication.didResignActiveNotification, object: nil, queue: .main) { _ in
             MainActor.assumeIsolated { SiteCardPanel.hide() }
         }
+    }
+
+    /// Cap for the material: white fill in a continuous rounded rect, so the
+    /// effect view only paints inside the same curve as the clip.
+    static func roundedMask(size: NSSize, radius: CGFloat) -> NSImage {
+        NSImage(size: size, flipped: false) { rect in
+            NSColor.white.setFill()
+            NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius).fill()
+            return true
+        }
+    }
+
+    static func applyRoundMask(to view: NSView, radius: CGFloat) {
+        let shape = CAShapeLayer()
+        shape.path = CGPath(roundedRect: view.bounds, cornerWidth: radius, cornerHeight: radius, transform: nil)
+        view.layer?.mask = shape
     }
 
     static func hide() {
@@ -155,6 +175,7 @@ enum SiteCardPanel {
             super.init(rootView: rootView)
             wantsLayer = true
             layer?.backgroundColor = NSColor.clear.cgColor
+            layer?.isOpaque = false
         }
 
         @available(*, unavailable)
@@ -162,9 +183,23 @@ enum SiteCardPanel {
 
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
+            clearChrome()
+        }
+
+        override func layout() {
+            super.layout()
+            clearChrome()
+        }
+
+        private func clearChrome() {
             // NSHostingView redraws opaque white unless kept clear after attach.
             layer?.backgroundColor = NSColor.clear.cgColor
             layer?.isOpaque = false
+            for sub in subviews {
+                sub.wantsLayer = true
+                sub.layer?.backgroundColor = NSColor.clear.cgColor
+                sub.layer?.isOpaque = false
+            }
         }
 
         override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
