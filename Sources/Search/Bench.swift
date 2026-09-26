@@ -1241,21 +1241,47 @@ final class Bench {
 
         case "site":
             // The site card for the tab on screen, or one step in on its
-            // connection, drawn off screen (see SiteCard.swift).
+            // connection, drawn off screen with the same clipped panel chrome
+            // the live popover uses (see SiteCard.swift).
             guard let path = request["path"] as? String else { answer(["error": "site needs a path"]); return }
             guard let tab = browser.active, !tab.isBlank else { answer(["error": "no page on screen"]); return }
             let deeper = request["security"] as? Bool == true
-            // On the ground: off screen there is no glass to stand on.
-            let host = NSHostingView(rootView: AnyView(SiteCard(browser: browser, tab: tab, deeper: deeper) {}.fixedSize().background(Palette.ground)))
-            host.frame = NSRect(origin: .zero, size: host.fittingSize)
-            let window = NSWindow(contentRect: host.frame, styleMask: .borderless, backing: .buffered, defer: false)
+            let card = SiteCard(browser: browser, tab: tab, deeper: deeper) {}
+            let host = NSHostingView(rootView: AnyView(card.fixedSize()))
+            host.wantsLayer = true
+            host.layer?.backgroundColor = NSColor.clear.cgColor
+            let size = host.fittingSize
+            let clip = NSView(frame: NSRect(origin: .zero, size: size))
+            clip.wantsLayer = true
+            clip.layer?.cornerRadius = 12
+            clip.layer?.cornerCurve = .continuous
+            clip.layer?.masksToBounds = true
+            clip.layer?.backgroundColor = NSColor.clear.cgColor
+            SiteCardPanel.applyRoundMask(to: clip, radius: 12)
+            let glass = NSVisualEffectView(frame: clip.bounds)
+            glass.material = .popover
+            glass.state = .active
+            glass.autoresizingMask = [.width, .height]
+            glass.maskImage = SiteCardPanel.roundedMask(size: size, radius: 12)
+            host.frame = glass.bounds
+            host.autoresizingMask = [.width, .height]
+            glass.addSubview(host)
+            clip.addSubview(glass)
+            // Coloured ground behind the clip so an unclipped white corner shows.
+            let ground = NSView(frame: NSRect(x: 0, y: 0, width: size.width + 24, height: size.height + 24))
+            ground.wantsLayer = true
+            ground.layer?.backgroundColor = NSColor(calibratedRed: 0.25, green: 0.12, blue: 0.35, alpha: 1).cgColor
+            clip.setFrameOrigin(NSPoint(x: 12, y: 12))
+            ground.addSubview(clip)
+            let window = NSWindow(contentRect: ground.frame, styleMask: .borderless, backing: .buffered, defer: false)
             window.appearance = NSApp.effectiveAppearance
-            window.contentView = host
-            host.layoutSubtreeIfNeeded()
+            window.isOpaque = false
+            window.backgroundColor = .clear
+            window.contentView = ground
+            ground.layoutSubtreeIfNeeded()
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-                host.frame = NSRect(origin: .zero, size: host.fittingSize)
-                guard let picture = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { answer(["error": "nothing drawn"]); return }
-                host.cacheDisplay(in: host.bounds, to: picture)
+                guard let picture = ground.bitmapImageRepForCachingDisplay(in: ground.bounds) else { answer(["error": "nothing drawn"]); return }
+                ground.cacheDisplay(in: ground.bounds, to: picture)
                 do {
                     try picture.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
                     answer(["saved": path])
@@ -1387,6 +1413,13 @@ final class Bench {
             // this typed, and that edit let go of by a click elsewhere.
             if let text = request["edittab"] as? String, let tab = browser.active {
                 browser.beginTabEdit(tab)
+                // beginTabEdit no-ops while renaming; don't overwrite the name draft.
+                if !browser.renamingTab, browser.editingTab == tab.id {
+                    browser.tabDraft = text
+                }
+            }
+            if let text = request["renametab"] as? String, let tab = browser.active {
+                browser.beginTabRename(tab)
                 browser.tabDraft = text
             }
             if request["finishedit"] as? Bool == true { browser.finishTabEdit() }
