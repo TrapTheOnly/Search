@@ -1319,7 +1319,7 @@ final class Browser: NSObject, ObservableObject {
                     select(back)
                     rememberSession()
                 } else {
-                    NSApp.keyWindow?.performClose(nil)
+                    closeBrowserWindow()
                 }
             } else {
                 remember(tab, at: 0)
@@ -1356,7 +1356,7 @@ final class Browser: NSObject, ObservableObject {
             } else if let back = awakeFallback(except: tab.id) {
                 select(back)
             } else {
-                NSApp.keyWindow?.performClose(nil)
+                closeBrowserWindow()
                 return
             }
         }
@@ -1365,8 +1365,8 @@ final class Browser: NSObject, ObservableObject {
 
     /// After ⌘W on a pin or Essential: land on another *awake* page only.
     /// Never wake a put-down pin/Essential (that was the reopen/respawn bug),
-    /// and never `newTab()` after putting down the last Essential — close the
-    /// window instead, like a normal Mac app.
+    /// and never keep the window open on asleep Essentials alone — close it
+    /// like a normal Mac app once nothing awake remains.
     private func landAfterPuttingDown(except id: Tab.ID, preferLoose: Bool) {
         let awake = strip.filter { $0.id != id && !$0.asleep }
         let pool: [Tab] = {
@@ -1385,20 +1385,26 @@ final class Browser: NSObject, ObservableObject {
             newTab()
             return
         }
-        // Another Essential still in the strip (even asleep) — land there.
-        // Closing one Essential must not close the window while others remain.
-        if let essential = essentials.first(where: { $0.id != id }) {
-            select(essential)
-            return
-        }
-        // Last Essential, nothing else awake — close the window.
-        NSApp.keyWindow?.performClose(nil)
+        // Nothing else awake — including other Essentials already put down.
+        // Never select an asleep Essential here: that woke siblings forever
+        // on multi-Essential ⌘W (M11). Close the window like a normal Mac app.
+        closeBrowserWindow()
     }
 
     /// Awake pages still in the strip besides `id` (Essentials included).
     private func awakeFallback(except id: Tab.ID) -> Tab? {
         strip.filter { $0.id != id && !$0.asleep }
             .max(by: { $0.touched < $1.touched })
+    }
+
+    /// Close the browser window. Prefer the key window; fall back so ⌘W still
+    /// works when Search is visible but not key (probe / another app in front).
+    func closeBrowserWindow() {
+        let window = NSApp.keyWindow
+            ?? NSApp.mainWindow
+            ?? Links.window
+            ?? NSApp.windows.first { $0.isVisible && $0.contentView != nil }
+        window?.performClose(nil)
     }
 
     /// Everything but this one. Pinned tabs are put down rather than removed —

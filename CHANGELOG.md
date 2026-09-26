@@ -45,6 +45,7 @@ in [ROADMAP.md](ROADMAP.md).
 
 ### Fixed
 
+- ⌘W on Essentials no longer wakes other put-down Essentials in a loop: putting down the last awake page (including the last awake Essential) closes the window, like a normal Mac app. Asleep Essentials stay put and are not re-selected.
 - Sidebar: a pinned tab that is not open (asleep — put down with ⌘W, or restored and not yet loaded) shows a trash control that removes the pin from the list, instead of a close (X) that only puts a live tab down. Open pins keep the normal close affordance.
 - Selecting a tab that is not one of the two split panes leaves Split and shows that tab, as in Safari / Arc / Zen. Switching between the two panes, maximize, and unsplit are unchanged.
 - Sidebar: after pinning a tab then switching spaces and back, pins restore as title rows under **Pinned** (not an icon grid) without overlaying loose rows or leaving ghost favicons. Essentials stay labelled icon squares above the swipe. Menu copy is **Pin to this space** vs **Make Essential (all spaces)**.
