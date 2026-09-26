@@ -37,7 +37,7 @@ struct SearchApp: App {
                     } else if browser.strip.allSatisfy(\.asleep) {
                         // Only put-down pins/Essentials left, nothing selected —
                         // ⌘W must close the window, not no-op.
-                        NSApp.keyWindow?.performClose(nil)
+                        browser.closeBrowserWindow()
                     }
                 }
                     .keyboardShortcut("w")
@@ -1092,7 +1092,7 @@ struct ContentView: View {
             } else if let tab = browser.active {
                 browser.close(tab)
             } else if browser.strip.allSatisfy(\.asleep) {
-                NSApp.keyWindow?.performClose(nil)
+                browser.closeBrowserWindow()
             }
         case "l" where !shifted:
             browser.edit()
