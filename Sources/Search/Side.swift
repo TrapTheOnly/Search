@@ -1280,6 +1280,7 @@ private struct SideRow: View {
         .modifier(Shake(travel: shake))
         .contentShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
         .modifier(OneClick(double: false) {
+            if browser.editingTab == tab.id { return }
             if live { browser.beginTabEdit(tab) } else { browser.select(tab) }
         })
         .overlay { MiddleClick(act: trailingAct) }

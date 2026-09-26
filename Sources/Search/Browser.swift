@@ -694,12 +694,20 @@ final class Browser: NSObject, ObservableObject {
     /// Set while that field is being used to name the tab rather than to go
     /// somewhere: the same field, the same keys, a different thing at the end.
     @Published private(set) var renamingTab = false
+    /// Bumped on every begin/cancel so a delayed finish from a prior field
+    /// cannot commit after Rename has already taken the name (or been dropped).
+    private(set) var tabEditGeneration = 0
 
     func beginTabEdit(_ tab: Tab) {
+        // A click that lands on the tab after Rename in the context menu must
+        // not turn the name field into an address field — that was feeding the
+        // title into destination/search and loading it as a Google query.
+        if renamingTab { return }
         guard let url = tab.address else {
             edit()
             return
         }
+        tabEditGeneration &+= 1
         renamingTab = false
         tabDraft = Address.pretty(url)
         editingTab = tab.id
@@ -708,6 +716,7 @@ final class Browser: NSObject, ObservableObject {
     /// Rename. The name the tab is wearing arrives selected, so typing
     /// replaces it; emptying the field gives the page its own title back.
     func beginTabRename(_ tab: Tab) {
+        tabEditGeneration &+= 1
         renamingTab = true
         tabDraft = tab.label
         editingTab = tab.id
@@ -715,23 +724,28 @@ final class Browser: NSObject, ObservableObject {
 
     func commitTabEdit() {
         guard let id = editingTab, let tab = strip.first(where: { $0.id == id }) else { return }
-        if renamingTab {
-            let typed = tabDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-            tab.name = typed.isEmpty ? nil : typed
+        // Snapshot before clearing: cancel first so a re-entrant finishTabEdit
+        // from dismantling the field cannot take the address/search path.
+        let renaming = renamingTab
+        let draft = tabDraft
+        if renaming {
+            let typed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
             cancelTabEdit()
+            tab.name = typed.isEmpty ? nil : typed
             writeSession(now: true)
             return
         }
-        guard let url = destination(for: tabDraft) else {
+        guard let url = destination(for: draft) else {
             // Stay put and say so, rather than quietly throwing the edit away.
             refusals += 1
             return
         }
-        editingTab = nil
+        cancelTabEdit()
         tab.go(to: url)
     }
 
     func cancelTabEdit() {
+        tabEditGeneration &+= 1
         editingTab = nil
         renamingTab = false
         tabDraft = ""
@@ -742,6 +756,13 @@ final class Browser: NSObject, ObservableObject {
     /// was typed is kept, as Return keeps it. An address left as it was loads
     /// nothing again, and a field left empty is let go.
     func finishTabEdit() {
+        finishTabEdit(expected: tabEditGeneration)
+    }
+
+    /// Same as `finishTabEdit()`, but ignored when `expected` is no longer the
+    /// live edit (Return already committed, Escape cancelled, or Rename began).
+    func finishTabEdit(expected generation: Int) {
+        guard generation == tabEditGeneration else { return }
         guard let id = editingTab, let tab = strip.first(where: { $0.id == id }) else { return }
         if renamingTab {
             commitTabEdit()

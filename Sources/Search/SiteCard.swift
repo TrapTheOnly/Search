@@ -81,18 +81,28 @@ enum SiteCardPanel {
         }
         let host = FirstClick(rootView: AnyView(card.fixedSize()))
         let size = host.fittingSize
-        let glass = NSVisualEffectView(frame: NSRect(origin: .zero, size: size))
+        // Clip in a plain NSView: NSVisualEffectView's own masksToBounds does
+        // not reliably hide the hosting view's opaque white rectangle, which
+        // showed as a sharp corner behind the rounded menu.
+        let clip = NSView(frame: NSRect(origin: .zero, size: size))
+        clip.wantsLayer = true
+        clip.layer?.cornerRadius = 12
+        clip.layer?.cornerCurve = .continuous
+        clip.layer?.masksToBounds = true
+        clip.layer?.backgroundColor = NSColor.clear.cgColor
+
+        let glass = NSVisualEffectView(frame: clip.bounds)
         glass.material = .popover
         glass.state = .active
+        glass.autoresizingMask = [.width, .height]
         glass.wantsLayer = true
-        glass.layer?.cornerRadius = 12
-        glass.layer?.masksToBounds = true
         host.frame = glass.bounds
         host.autoresizingMask = [.width, .height]
         glass.addSubview(host)
+        clip.addSubview(glass)
 
         let panel = Panel(contentRect: NSRect(origin: .zero, size: size), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
-        panel.contentView = glass
+        panel.contentView = clip
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = true
@@ -108,12 +118,13 @@ enum SiteCardPanel {
         panel.setFrameOrigin(origin)
         window.addChildWindow(panel, ordered: .above)
         // Its height follows the card: one step in on the connection is taller.
-        host.onResize = { [weak panel] fitted in
+        host.onResize = { [weak panel, weak clip] fitted in
             guard let panel, fitted.height > 0 else { return }
             var frame = panel.frame
             frame.origin.y += frame.height - fitted.height
             frame.size = fitted
             panel.setFrame(frame, display: true)
+            clip?.frame = NSRect(origin: .zero, size: fitted)
         }
         self.panel = panel
         resign = NotificationCenter.default.addObserver(forName: NSApplication.didResignActiveNotification, object: nil, queue: .main) { _ in
@@ -139,6 +150,23 @@ enum SiteCardPanel {
     /// says when what it shows changes size.
     private final class FirstClick: NSHostingView<AnyView> {
         var onResize: ((NSSize) -> Void)?
+
+        required init(rootView: AnyView) {
+            super.init(rootView: rootView)
+            wantsLayer = true
+            layer?.backgroundColor = NSColor.clear.cgColor
+        }
+
+        @available(*, unavailable)
+        required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            // NSHostingView redraws opaque white unless kept clear after attach.
+            layer?.backgroundColor = NSColor.clear.cgColor
+            layer?.isOpaque = false
+        }
+
         override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
         override func invalidateIntrinsicContentSize() {
             super.invalidateIntrinsicContentSize()

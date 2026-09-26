@@ -567,6 +567,10 @@ private struct TabPill: View {
         // and edits its letter; everything else answers the first click at
         // once. Change Letter in the menu covers the rest.
         .modifier(OneClick(double: live && pinned) {
+            // Already editing this tab (address or rename): leave the field
+            // alone. A click that leaks from the context menu's Rename item
+            // used to call beginTabEdit and turn the title into a search.
+            if browser.editingTab == tab.id { return }
             if live && pinned {
                 browser.editLetter(tab)
             } else if live && !pinned {
@@ -958,6 +962,11 @@ struct TabAddressField: NSViewRepresentable {
         ) -> Bool {
             switch command {
             case #selector(NSResponder.insertNewline(_:)):
+                // Sync the field before commit: selected text + Return must
+                // keep the name, never fall through to destination/search.
+                if let field = control as? NSTextField {
+                    browser.tabDraft = field.stringValue
+                }
                 // Returning true keeps the field editing, which is what lets a
                 // refused address stay on screen instead of being thrown away.
                 browser.commitTabEdit()
@@ -973,7 +982,8 @@ struct TabAddressField: NSViewRepresentable {
         /// Clicking anywhere else keeps what was typed, as Return does.
         func controlTextDidEndEditing(_ note: Notification) {
             let browser = browser
-            DispatchQueue.main.async { browser.finishTabEdit() }
+            let generation = browser.tabEditGeneration
+            DispatchQueue.main.async { browser.finishTabEdit(expected: generation) }
         }
 
         /// A press on something that takes no focus — the strip's empty
@@ -990,7 +1000,8 @@ struct TabAddressField: NSViewRepresentable {
                       !field.bounds.contains(field.convert(event.locationInWindow, from: nil))
                 else { return event }
                 let browser = self.browser
-                DispatchQueue.main.async { browser.finishTabEdit() }
+                let generation = browser.tabEditGeneration
+                DispatchQueue.main.async { browser.finishTabEdit(expected: generation) }
                 return event
             }
         }

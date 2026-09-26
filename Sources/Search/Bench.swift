@@ -1389,6 +1389,10 @@ final class Bench {
                 browser.beginTabEdit(tab)
                 browser.tabDraft = text
             }
+            if let text = request["renametab"] as? String, let tab = browser.active {
+                browser.beginTabRename(tab)
+                browser.tabDraft = text
+            }
             if request["finishedit"] as? Bool == true { browser.finishTabEdit() }
             if #available(macOS 15.4, *), let on = request["extensions"] as? Bool { Extensions.shared.menuOpen = on }
             answer(["ok": true])
