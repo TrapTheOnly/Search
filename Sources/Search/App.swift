@@ -31,7 +31,15 @@ struct SearchApp: App {
                 Button("Open Address…") { browser.edit() }
                     .keyboardShortcut("l")
                 Divider()
-                Button("Close Tab") { if let tab = browser.active { browser.close(tab) } }
+                Button("Close Tab") {
+                    if let tab = browser.active {
+                        browser.close(tab)
+                    } else if browser.strip.allSatisfy(\.asleep) {
+                        // Only put-down pins/Essentials left, nothing selected —
+                        // ⌘W must close the window, not no-op.
+                        NSApp.keyWindow?.performClose(nil)
+                    }
+                }
                     .keyboardShortcut("w")
             }
             CommandGroup(replacing: .printItem) {
@@ -1083,6 +1091,8 @@ struct ContentView: View {
                 browser.endSplit()
             } else if let tab = browser.active {
                 browser.close(tab)
+            } else if browser.strip.allSatisfy(\.asleep) {
+                NSApp.keyWindow?.performClose(nil)
             }
         case "l" where !shifted:
             browser.edit()

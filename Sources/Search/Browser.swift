@@ -1344,8 +1344,8 @@ final class Browser: NSObject, ObservableObject {
 
     /// After ⌘W on a pin or Essential: land on another *awake* page only.
     /// Never wake a put-down pin/Essential (that was the reopen/respawn bug),
-    /// and never `newTab()` after putting down the last Essential — close the
-    /// window instead, like a normal Mac app.
+    /// and never keep the window open on asleep Essentials alone — close it
+    /// like a normal Mac app once nothing awake remains.
     private func landAfterPuttingDown(except id: Tab.ID, preferLoose: Bool) {
         let awake = strip.filter { $0.id != id && !$0.asleep }
         let pool: [Tab] = {
@@ -1364,13 +1364,9 @@ final class Browser: NSObject, ObservableObject {
             newTab()
             return
         }
-        // Another Essential still in the strip (even asleep) — land there.
-        // Closing one Essential must not close the window while others remain.
-        if let essential = essentials.first(where: { $0.id != id }) {
-            select(essential)
-            return
-        }
-        // Last Essential, nothing else awake — close the window.
+        // Nothing else awake — including other Essentials already put down.
+        // Never select an asleep Essential here: that woke siblings forever
+        // on multi-Essential ⌘W (M11). Close the window like a normal Mac app.
         NSApp.keyWindow?.performClose(nil)
     }
 
