@@ -45,6 +45,7 @@ in [ROADMAP.md](ROADMAP.md).
 
 ### Fixed
 
+- Essentials drag-to-morph no longer freezes or leaves floating ghost chips: carry/preview state clears without animation on drop or cancel, live morph skips matched-geometry and settle springs while the finger is down, and zone thresholds use hysteresis so slow in/out drags do not thrash the grid.
 - ⌘W on Essentials no longer wakes other put-down Essentials in a loop: putting down the last awake page (including the last awake Essential) closes the window, like a normal Mac app. Asleep Essentials stay put and are not re-selected.
 - Sidebar: a pinned tab that is not open (asleep — put down with ⌘W, or restored and not yet loaded) shows a trash control that removes the pin from the list, instead of a close (X) that only puts a live tab down. Open pins keep the normal close affordance.
 - Selecting a tab that is not one of the two split panes leaves Split and shows that tab, as in Safari / Arc / Zen. Switching between the two panes, maximize, and unsplit are unchanged. Membership is cleared from every select path (sidebar, strip, ⌘1–9, Option+Tab); a bare `./bench split` reports status without remapping the pair.

@@ -105,11 +105,7 @@ struct SideBar: View {
             // Clear of the foot, which sits over the column's bottom edge.
             .padding(.bottom, SideBar.footHeight)
             .onChange(of: browser.spaceID) { _, _ in
-                pinDragging = nil
-                dragZone = nil
-                pinTravel = .zero
-                dropHint = nil
-                hapticZone = nil
+                clearDrag()
             }
 
             VStack {
@@ -380,8 +376,11 @@ struct SideBar: View {
     /// block (Zen chrome). Width spring-animates when the count changes.
     /// While a pin/loose tab hovers here, preview the post-drop count so the
     /// row splits 1→2 / 2→3 and existing tiles part around the insert slot.
+    /// Layout/morph springs stay off while a drag is live — animating the
+    /// grid against every DragGesture pixel was freezing and orphaning chips.
     private var essentialsBlock: some View {
         let tabs = browser.essentials
+        let dragging = pinDragging != nil
         let incoming = dropHint?.zone == .essentials && dragZone != .essentials
         let outgoing = dragZone == .essentials && dropHint != nil && dropHint?.zone != .essentials
         let previewCount = max(0, tabs.count + (incoming ? 1 : 0) - (outgoing ? 1 : 0))
@@ -405,7 +404,9 @@ struct SideBar: View {
                             tab: tab,
                             live: tab.id == browser.activeID,
                             pill: pill,
-                            morph: morph,
+                            // Matched-geometry mid-drag leaves orphan copies when
+                            // asRow toggles; link only when the chip is parked.
+                            morph: held ? nil : morph,
                             width: asRow ? max(width, prefs.sideWidth - 20) : width,
                             height: asRow ? SideBar.row : height,
                             asRow: asRow
@@ -413,7 +414,6 @@ struct SideBar: View {
                         .offset(pinOffset(held: held, index: index, columns: cols, width: width, height: height))
                         .transaction { if held { $0.animation = nil } }
                         .animation(held ? nil : Motion.settle, value: dropHint?.index)
-                        .animation(Motion.settle, value: asRow)
                         .zIndex(held ? 1 : 0)
                         .shadow(color: .black.opacity(held ? 0.16 : 0), radius: 10, y: 3)
                         .gesture(essentialDrag(
@@ -441,9 +441,9 @@ struct SideBar: View {
                 alignment: .topLeading
             )
             .coordinateSpace(name: "essentials")
-            .animation(Motion.settle, value: width)
-            .animation(Motion.settle, value: cols)
-            .animation(Motion.settle, value: layoutCount)
+            .animation(dragging ? nil : Motion.settle, value: width)
+            .animation(dragging ? nil : Motion.settle, value: cols)
+            .animation(dragging ? nil : Motion.settle, value: layoutCount)
             Rectangle()
                 .fill(Palette.hairline)
                 .frame(height: 1)
@@ -486,7 +486,7 @@ struct SideBar: View {
                             pill: pill,
                             close: { browser.close(tab) },
                             geometry: "live-pin-row",
-                            morph: morph,
+                            morph: held ? nil : morph,
                             asEssential: asEssential,
                             essentialWidth: pinWidth(for: max(browser.essentials.count + 1, 1)),
                             essentialHeight: min(SideBar.square, pinWidth(for: max(browser.essentials.count + 1, 1)))
@@ -494,7 +494,6 @@ struct SideBar: View {
                         .offset(rowOffset(held: held, index: index, step: step, zone: .pinned))
                         .transaction { if held { $0.animation = nil } }
                         .animation(held ? nil : Motion.settle, value: dropHint?.index)
-                        .animation(Motion.settle, value: asEssential)
                         .zIndex(held ? 1 : 0)
                         .shadow(color: .black.opacity(held ? 0.14 : 0), radius: 12, y: 4)
                         .gesture(pinnedRowDrag(tab: tab, index: index, step: step, count: tabs.count))
@@ -562,6 +561,21 @@ struct SideBar: View {
         NSHapticFeedbackManager.defaultPerformer.perform(
             crossed ? .levelChange : .alignment, performanceTime: .now
         )
+    }
+
+    /// Drop carry / morph chrome immediately — never inside `withAnimation`.
+    /// Animating these clears left matched-geometry + transition copies stuck
+    /// as floating chips after drop, cancel, or zone thrash.
+    private func clearDrag() {
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            pinDragging = nil
+            dragZone = nil
+            pinTravel = .zero
+            dropHint = nil
+            hapticZone = nil
+        }
     }
 
     /// The one square actually held stays glued to the fingers; siblings part
@@ -659,15 +673,20 @@ struct SideBar: View {
                 pinTravel = value.translation
                 let stepX = width + SideBar.pinGap
                 let stepY = height + SideBar.pinGap
-                // Past the bottom of the essentials block → leave essentials.
-                if value.location.y > blockH + 12 {
+                // Hysteresis at the essentials floor: require a deeper poke to
+                // leave, and a clear re-entry, so slow drags don't thrash morph.
+                let leaving = dropHint?.zone != .essentials && dropHint != nil
+                let leaveY = blockH + (leaving ? 4 : 16)
+                if value.location.y > leaveY {
                     let intoPins = value.location.y < blockH + 12 + CGFloat(max(1, browser.spacePins)) * (SideBar.row + SideBar.gap) + 40
                     if intoPins || browser.spacePins > 0 {
                         let idx = max(0, Int(((value.location.y - blockH - 12) / (SideBar.row + SideBar.gap)).rounded()))
-                        dropHint = DropHint(zone: .pinned, index: min(idx, browser.spacePins))
+                        let next = DropHint(zone: .pinned, index: min(idx, browser.spacePins))
+                        if dropHint != next { dropHint = next }
                         bumpHaptic(.pinned)
                     } else {
-                        dropHint = DropHint(zone: .loose, index: 0)
+                        let next = DropHint(zone: .loose, index: 0)
+                        if dropHint != next { dropHint = next }
                         bumpHaptic(.loose)
                     }
                     return
@@ -677,11 +696,15 @@ struct SideBar: View {
                     moved: pinDelta(columns: columns, stepX: stepX, stepY: stepY),
                     count: count
                 )
-                dropHint = DropHint(zone: .essentials, index: ideal)
+                let next = DropHint(zone: .essentials, index: ideal)
+                if dropHint != next { dropHint = next }
                 bumpHaptic(.essentials)
             }
             .onEnded { _ in
                 let hint = dropHint
+                let from = pinFrom
+                // Model may settle; carry chrome must clear without animation —
+                // clearing pinTravel/dropHint inside withAnimation orphans morph layers.
                 withAnimation(Motion.settle) {
                     if let hint, hint.zone == .pinned {
                         browser.removeEssential(tab)
@@ -689,15 +712,11 @@ struct SideBar: View {
                         browser.move(tab, to: min(hint.index, max(0, browser.spacePins - 1)))
                     } else if let hint, hint.zone == .loose {
                         browser.unpin(tab)
-                    } else if let hint, hint.zone == .essentials, hint.index != pinFrom {
+                    } else if let hint, hint.zone == .essentials, hint.index != from {
                         browser.movePin(tab, to: hint.index)
                     }
-                    pinDragging = nil
-                    dragZone = nil
-                    pinTravel = .zero
-                    dropHint = nil
-                    hapticZone = nil
                 }
+                clearDrag()
             }
     }
 
@@ -713,17 +732,22 @@ struct SideBar: View {
                     bumpHaptic(.pinned)
                 }
                 // Up past the top → essentials (allow x so the tile can track slots).
-                if value.location.y < -10 {
+                // Hysteresis: once in essentials, stay until clearly back in pins.
+                let inEssentials = dropHint?.zone == .essentials
+                let enterY: CGFloat = inEssentials ? 2 : -10
+                if value.location.y < enterY {
                     pinTravel = value.translation
                     let idx = essentialInsertIndex(atX: value.location.x, count: browser.essentials.count)
-                    dropHint = DropHint(zone: .essentials, index: idx)
+                    let next = DropHint(zone: .essentials, index: idx)
+                    if dropHint != next { dropHint = next }
                     bumpHaptic(.essentials)
                     return
                 }
                 pinTravel = CGSize(width: 0, height: value.translation.height)
                 // Below the pin block → loose.
                 if value.location.y > CGFloat(count) * step + 8 {
-                    dropHint = DropHint(zone: .loose, index: 0)
+                    let next = DropHint(zone: .loose, index: 0)
+                    if dropHint != next { dropHint = next }
                     bumpHaptic(.loose)
                     return
                 }
@@ -735,26 +759,24 @@ struct SideBar: View {
                     count: count,
                     step: step
                 )
-                dropHint = DropHint(zone: .pinned, index: target)
+                let next = DropHint(zone: .pinned, index: target)
+                if dropHint != next { dropHint = next }
                 bumpHaptic(.pinned)
             }
             .onEnded { _ in
                 let hint = dropHint
+                let from = pinFrom
                 withAnimation(Motion.settle) {
                     if let hint, hint.zone == .essentials {
                         browser.makeEssential(tab)
                         browser.movePin(tab, to: hint.index)
                     } else if let hint, hint.zone == .loose {
                         browser.unpin(tab)
-                    } else if let hint, hint.zone == .pinned, hint.index != pinFrom {
+                    } else if let hint, hint.zone == .pinned, hint.index != from {
                         browser.move(tab, to: hint.index)
                     }
-                    pinDragging = nil
-                    dragZone = nil
-                    pinTravel = .zero
-                    dropHint = nil
-                    hapticZone = nil
                 }
+                clearDrag()
             }
     }
 
@@ -789,17 +811,21 @@ struct SideBar: View {
                 // Above the loose list → pinned, or further → essentials.
                 if value.location.y < -8 {
                     let pinBlock = CGFloat(max(1, browser.spacePins)) * step + 20
-                    if value.location.y < -8 - pinBlock {
+                    let inEssentials = dropHint?.zone == .essentials
+                    let essentialsY = -8 - pinBlock + (inEssentials ? 10 : 0)
+                    if value.location.y < essentialsY {
                         pinTravel = value.translation
                         let idx = essentialInsertIndex(atX: value.location.x, count: browser.essentials.count)
-                        dropHint = DropHint(zone: .essentials, index: idx)
+                        let next = DropHint(zone: .essentials, index: idx)
+                        if dropHint != next { dropHint = next }
                         bumpHaptic(.essentials)
                     } else {
                         pinTravel = CGSize(width: 0, height: value.translation.height)
                         // y is negative above the loose list; map onto pin slots.
                         let fromBottom = (-value.location.y - 8) / step
                         let idx = max(0, browser.spacePins - Int(fromBottom.rounded()))
-                        dropHint = DropHint(zone: .pinned, index: min(max(0, idx), browser.spacePins))
+                        let next = DropHint(zone: .pinned, index: min(max(0, idx), browser.spacePins))
+                        if dropHint != next { dropHint = next }
                         bumpHaptic(.pinned)
                     }
                     return
@@ -813,11 +839,13 @@ struct SideBar: View {
                     count: count,
                     step: step
                 )
-                dropHint = DropHint(zone: .loose, index: target)
+                let next = DropHint(zone: .loose, index: target)
+                if dropHint != next { dropHint = next }
                 bumpHaptic(.loose)
             }
             .onEnded { _ in
                 let hint = dropHint
+                let from = pinFrom
                 let didLift = browser.splitCarry.lifted
                 withAnimation(Motion.settle) {
                     if !didLift {
@@ -827,7 +855,7 @@ struct SideBar: View {
                         } else if let hint, hint.zone == .pinned {
                             browser.pin(tab)
                             browser.move(tab, to: min(hint.index, max(0, browser.spacePins - 1)))
-                        } else if let hint, hint.zone == .loose, hint.index != pinFrom,
+                        } else if let hint, hint.zone == .loose, hint.index != from,
                                   loosePieces.indices.contains(hint.index) {
                             if case .folder(let folder, _) = loosePieces[hint.index] {
                                 browser.place(tab, in: folder)
@@ -837,12 +865,8 @@ struct SideBar: View {
                             }
                         }
                     }
-                    pinDragging = nil
-                    dragZone = nil
-                    pinTravel = .zero
-                    dropHint = nil
-                    hapticZone = nil
                 }
+                clearDrag()
                 browser.finishCarry()
             }
     }
@@ -886,7 +910,7 @@ struct SideBar: View {
                             live: tab.id == browser.activeID,
                             pill: pill,
                             close: { browser.close(tab) },
-                            morph: morph,
+                            morph: held ? nil : morph,
                             asEssential: asEssential,
                             essentialWidth: pinWidth(for: eCount),
                             essentialHeight: min(SideBar.square, pinWidth(for: eCount))
@@ -894,7 +918,6 @@ struct SideBar: View {
                         .offset(rowOffset(held: held, index: index, step: step, zone: .loose))
                         .transaction { if held { $0.animation = nil } }
                         .animation(held ? nil : Motion.settle, value: dropHint?.index)
-                        .animation(Motion.settle, value: asEssential)
                         .zIndex(held ? 1 : 0)
                         .shadow(color: .black.opacity(held ? 0.14 : 0), radius: 12, y: 4)
                         .gesture(looseDrag(tab: tab, index: index, step: step, count: loosePieces.count))
@@ -1025,37 +1048,17 @@ private struct PinSquare: View {
     private var scale: CGFloat { min(width, height) }
 
     var body: some View {
-        Group {
-            if asRow {
-                HStack(spacing: 8) {
-                    if prefs.glyph == .icons, let icon = tab.icon {
-                        Mark(icon: icon, letter: tab.pin ?? tab.monogram, size: 15)
-                    } else {
-                        Text(tab.pin ?? tab.monogram)
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundStyle(Palette.ink)
-                    }
-                    Text(tab.label)
-                        .font(.system(size: 12.5))
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                        .foregroundStyle(Palette.ink)
-                    Spacer(minLength: 0)
-                }
-                .padding(.horizontal, 10)
-            } else if browser.editingPin == tab.id {
-                PinField(browser: browser, tab: tab)
-            } else if prefs.glyph == .icons, let icon = tab.icon {
-                Mark(icon: icon, letter: tab.pin ?? "", size: scale * 16 / 34, dim: tab.asleep)
-            } else {
-                Text(tab.pin ?? "")
-                    .font(.system(size: scale * 12 / 34, weight: .medium))
-                    .foregroundStyle((live ? Palette.ink : Palette.muted).opacity(tab.asleep ? 0.45 : 1))
-            }
+        // Opacity swap (not if/else + transition): branch removal with
+        // `.transition(.opacity)` left floating ghost chips when the drag
+        // interrupted a settle spring mid-morph.
+        ZStack {
+            squareContent
+                .opacity(asRow ? 0 : 1)
+            rowContent
+                .opacity(asRow ? 1 : 0)
         }
-        .frame(width: asRow ? nil : scale * 16 / 34, height: asRow ? nil : scale * 16 / 34)
         .frame(
-            width: asRow ? nil : width,
+            width: width,
             height: height,
             alignment: asRow ? .leading : .center
         )
@@ -1082,10 +1085,48 @@ private struct PinSquare: View {
         .contextMenu { TabMenu(browser: browser, tab: tab, close: { browser.close(tab) }) }
         .help(tab.label)
         .animation(Motion.quick, value: hovering)
-        .animation(Motion.settle, value: asRow)
-        // Morph into / out of the square when crossing the essentials boundary.
+        // Live drag morph must be instant — spring here fights DragGesture.
+        .animation(nil, value: asRow)
         .modifier(MorphLink(id: tab.id, namespace: morph))
-        .transition(.scale(scale: 0.8).combined(with: .opacity))
+    }
+
+    @ViewBuilder
+    private var squareContent: some View {
+        Group {
+            if browser.editingPin == tab.id {
+                PinField(browser: browser, tab: tab)
+            } else if prefs.glyph == .icons, let icon = tab.icon {
+                Mark(icon: icon, letter: tab.pin ?? "", size: scale * 16 / 34, dim: tab.asleep)
+            } else {
+                Text(tab.pin ?? "")
+                    .font(.system(size: scale * 12 / 34, weight: .medium))
+                    .foregroundStyle((live ? Palette.ink : Palette.muted).opacity(tab.asleep ? 0.45 : 1))
+            }
+        }
+        .frame(width: scale * 16 / 34, height: scale * 16 / 34)
+        .frame(width: width, height: height)
+        .allowsHitTesting(!asRow)
+    }
+
+    private var rowContent: some View {
+        HStack(spacing: 8) {
+            if prefs.glyph == .icons, let icon = tab.icon {
+                Mark(icon: icon, letter: tab.pin ?? tab.monogram, size: 15)
+            } else {
+                Text(tab.pin ?? tab.monogram)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(Palette.ink)
+            }
+            Text(tab.label)
+                .font(.system(size: 12.5))
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .foregroundStyle(Palette.ink)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 10)
+        .frame(height: height, alignment: .leading)
+        .allowsHitTesting(asRow)
     }
 }
 
@@ -1154,16 +1195,18 @@ private struct SideRow: View {
     private var essentialScale: CGFloat { min(essentialWidth, essentialHeight) }
 
     var body: some View {
-        Group {
-            if asEssential {
-                essentialChip
-            } else {
-                rowChip
-            }
+        // Keep both chips mounted and cross-fade — if/else + transition left
+        // orphan opacity layers when the drag ended mid-settle.
+        ZStack(alignment: .leading) {
+            rowChip
+                .opacity(asEssential ? 0 : 1)
+                .allowsHitTesting(!asEssential)
+            essentialChip
+                .opacity(asEssential ? 1 : 0)
+                .allowsHitTesting(asEssential)
         }
-        .animation(Motion.settle, value: asEssential)
+        .animation(nil, value: asEssential)
         .modifier(MorphLink(id: tab.id, namespace: morph))
-        .transition(.scale(scale: 0.94, anchor: .leading).combined(with: .opacity))
     }
 
     /// Square tile matching Essentials while the row is carried into that zone.
