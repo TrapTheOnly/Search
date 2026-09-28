@@ -2,15 +2,17 @@ import SwiftUI
 
 // Spaces, paged through: in the column, two fingers sideways go from one to
 // the next, the rows following them, as in Arc; in the bar across the top,
-// the same up and down, the row of tabs following them — or a mouse wheel's
-// notch, one space at a time. Past the last space a new one is made in
-// place. The space's icon turns over as it goes (see SpaceDot).
+// the same up or down, the row of tabs following them — or Option plus a
+// mouse wheel's notch, one space at a time. Past the last space a new one
+// is made in place. The space's icon turns over as it goes (see SpaceDot).
 
 /// The swipe between spaces. It reads the trackpad's own scroll events
 /// before anything else sees them, and takes only a gesture that starts over
 /// the tabs and sets off clearly along the spaces' axis — sideways in the
 /// column, up or down in the bar; everything else (scrolling the tabs, a
-/// long row of them sideways) goes on as it would have.
+/// long row of them sideways) goes on as it would have. A plain mouse wheel
+/// over an overflowing strip must reach the tabs: swallowing every notch
+/// for spaces left the strip frozen between throttle windows.
 @MainActor
 final class SpaceSwipe {
     static let shared = SpaceSwipe()
@@ -23,9 +25,8 @@ final class SpaceSwipe {
     /// The glide after a swipe that was taken, which is taken too.
     private var gliding = false
     private var gathered = CGSize.zero
-    /// When the wheel last turned over the bar, whether a space came of it
-    /// or not. A spin of the wheel is a run of notches close together, and
-    /// it brings one space: the next waits for the wheel to have rested.
+    /// When Option+wheel last brought a space. A spin is a run of notches
+    /// close together and brings one space; the next waits for a rest.
     private var notched = Date.distantPast
     /// Until when a new gesture is let go by: the hand that just brought a
     /// space is often still moving, and its next stroke would take one more.
@@ -61,13 +62,20 @@ final class SpaceSwipe {
     /// True for an event the swipe keeps for itself.
     private func takes(_ event: NSEvent) -> Bool {
         guard let browser, browser.prefs.usesSpaces, !browser.folded || browser.peeking else { return false }
-        // A mouse wheel over the bar: a spin, a space.
+        // A mouse wheel over the bar. Without Option the strip needs every
+        // notch to scroll its tabs — taking them for spaces (and eating the
+        // ones inside the 0.3s rest) made an overflowing row look frozen.
+        // Option+wheel keeps the old one-notch-one-space behaviour.
         if !event.hasPreciseScrollingDeltas {
-            guard !browser.prefs.sidebar, event.scrollingDeltaY != 0, overTabs(event, in: browser) else { return false }
+            guard !browser.prefs.sidebar,
+                  event.scrollingDeltaY != 0,
+                  event.modifierFlags.contains(.option),
+                  overTabs(event, in: browser)
+            else { return false }
             let now = Date()
             let rested = now.timeIntervalSince(notched) > 0.3 && now > resting
+            guard rested else { return false }
             notched = now
-            guard rested else { return true }
             let here = browser.makingSpace ? browser.spaces.count : (browser.spaces.firstIndex { $0.id == browser.spaceID } ?? 0)
             let target = here + (event.scrollingDeltaY < 0 ? 1 : -1)
             if target >= 0, target <= browser.spaces.count { slide(browser, to: target, from: here) }
