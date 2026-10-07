@@ -20,6 +20,8 @@ struct TabBar: View {
     @State private var doors: CGFloat = 0
     /// Live reorder preview for the top strip (commit on drop — see `Carried`).
     @State private var tabReorder: TabReorder? = nil
+    /// Pixel lead of the overflowing strip for plain-wheel nudges (`StripWheel`).
+    @State private var stripLead: CGFloat = 0
 
     var body: some View {
         // A GeometryReader is only here to measure the width. Its content is
@@ -82,9 +84,19 @@ struct TabBar: View {
                                     }
                                     .scrollDisabled(!overflowing(in: geo.size.width))
                                     .frame(width: spaceRun(in: geo.size.width))
-                                    .onAppear { reveal(reader, in: geo.size.width) }
-                                    .onChange(of: overflowing(in: geo.size.width)) { _, _ in reveal(reader, in: geo.size.width) }
+                                    .onAppear {
+                                        reveal(reader, in: geo.size.width)
+                                        bindStripWheel(reader, in: geo.size.width)
+                                    }
+                                    .onDisappear { StripWheel.nudge = nil }
+                                    .onChange(of: overflowing(in: geo.size.width)) { _, _ in
+                                        reveal(reader, in: geo.size.width)
+                                        bindStripWheel(reader, in: geo.size.width)
+                                    }
                                     .onChange(of: browser.activeID) { _, _ in reveal(reader, in: geo.size.width, gliding: true) }
+                                    .onChange(of: browser.spaceShownPieces.map(\.id)) { _, _ in
+                                        bindStripWheel(reader, in: geo.size.width)
+                                    }
                                 }
                                 .offset(y: browser.spaceSwipe)
                             }
@@ -347,6 +359,37 @@ struct TabBar: View {
             } else {
                 reader.scrollTo(id)
             }
+        }
+    }
+
+    /// Plain mouse wheel → horizontal strip steps (installed for `SpaceSwipe`).
+    private func bindStripWheel(_ reader: ScrollViewProxy, in strip: CGFloat) {
+        guard overflowing(in: strip) else {
+            StripWheel.nudge = nil
+            return
+        }
+        let pieces = browser.spaceShownPieces
+        let each = width(in: strip) + Metrics.tabGap
+        let room = spaceRun(in: strip)
+        let maxLead = max(0, CGFloat(pieces.count) * each - room)
+        let lead = $stripLead
+        StripWheel.nudge = { delta in
+            guard !pieces.isEmpty, each > 0 else { return false }
+            let next = min(max(0, lead.wrappedValue + delta), maxLead)
+            lead.wrappedValue = next
+            let index = min(Int(next / each), pieces.count - 1)
+            let id = pieces[index].id
+            // Scroll from the wheel monitor must hop a turn — calling
+            // `scrollTo` re-entrantly inside the local NSEvent handler does not
+            // move the strip.
+            DispatchQueue.main.async {
+                var transaction = Transaction()
+                transaction.disablesAnimations = true
+                withTransaction(transaction) {
+                    reader.scrollTo(id, anchor: .leading)
+                }
+            }
+            return true
         }
     }
 

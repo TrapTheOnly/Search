@@ -11,8 +11,19 @@ import SwiftUI
 /// the tabs and sets off clearly along the spaces' axis — sideways in the
 /// column, up or down in the bar; everything else (scrolling the tabs, a
 /// long row of them sideways) goes on as it would have. A plain mouse wheel
-/// over an overflowing strip must reach the tabs: swallowing every notch
-/// for spaces left the strip frozen between throttle windows.
+/// over an overflowing strip must move the tabs: Option+wheel still steps
+/// spaces, and without Option the notch is applied to the strip's own
+/// scroll view so the page underneath cannot swallow it.
+/// Plain-wheel nudges for the top tab strip's SwiftUI `ScrollView`.
+/// `TabBar` installs a handler while the strip overflows; `SpaceSwipe` calls it
+/// so a vertical notch becomes a horizontal step (and never reaches the page).
+@MainActor
+enum StripWheel {
+    static var nudge: ((CGFloat) -> Bool)?
+    @discardableResult
+    static func nudge(_ delta: CGFloat) -> Bool { nudge?(delta) ?? false }
+}
+
 @MainActor
 final class SpaceSwipe {
     static let shared = SpaceSwipe()
@@ -59,27 +70,35 @@ final class SpaceSwipe {
         return event.locationInWindow.y > window.frame.height - Metrics.strip
     }
 
+    /// Ask the top strip (see `StripWheel`) to move by one plain-wheel notch.
+    private func scrollStrip(_ event: NSEvent) -> Bool {
+        // Notch deltas are in lines; a tab-sized step matches AppKit's feel.
+        StripWheel.nudge(-event.scrollingDeltaY * Metrics.tabMinWidth)
+    }
+
     /// True for an event the swipe keeps for itself.
     private func takes(_ event: NSEvent) -> Bool {
         guard let browser, browser.prefs.usesSpaces, !browser.folded || browser.peeking else { return false }
-        // A mouse wheel over the bar. Without Option the strip needs every
-        // notch to scroll its tabs — taking them for spaces (and eating the
-        // ones inside the 0.3s rest) made an overflowing row look frozen.
-        // Option+wheel keeps the old one-notch-one-space behaviour.
+        // A mouse wheel over the bar. Option+wheel: one space per rest window.
+        // Plain wheel: scroll the overflowing strip horizontally and consume
+        // the event — SwiftUI leaves a vertical notch to the page when the
+        // pointer sits on a tab pill, so returning false still looked frozen.
         if !event.hasPreciseScrollingDeltas {
             guard !browser.prefs.sidebar,
                   event.scrollingDeltaY != 0,
-                  event.modifierFlags.contains(.option),
                   overTabs(event, in: browser)
             else { return false }
-            let now = Date()
-            let rested = now.timeIntervalSince(notched) > 0.3 && now > resting
-            guard rested else { return false }
-            notched = now
-            let here = browser.makingSpace ? browser.spaces.count : (browser.spaces.firstIndex { $0.id == browser.spaceID } ?? 0)
-            let target = here + (event.scrollingDeltaY < 0 ? 1 : -1)
-            if target >= 0, target <= browser.spaces.count { slide(browser, to: target, from: here) }
-            return true
+            if event.modifierFlags.intersection(.deviceIndependentFlagsMask).contains(.option) {
+                let now = Date()
+                let rested = now.timeIntervalSince(notched) > 0.3 && now > resting
+                guard rested else { return false }
+                notched = now
+                let here = browser.makingSpace ? browser.spaces.count : (browser.spaces.firstIndex { $0.id == browser.spaceID } ?? 0)
+                let target = here + (event.scrollingDeltaY < 0 ? 1 : -1)
+                if target >= 0, target <= browser.spaces.count { slide(browser, to: target, from: here) }
+                return true
+            }
+            return scrollStrip(event)
         }
         if !event.momentumPhase.isEmpty { return gliding }
         switch event.phase {
