@@ -280,7 +280,10 @@ final class FormRelay: NSObject, WKScriptMessageHandler {
 
       function caret() {
         var el = document.activeElement;
-        var both = pair();
+        // The boxes are only looked for with the caret in one: this runs on
+        // every frame of every scroll, and looking goes through the whole page
+        // (upstream `3f414ac`).
+        var both = el && (el.tagName || '').toLowerCase() === 'input' ? pair() : null;
         var rect = null;
         if (both && el && (el === both.user || el === both.pass)) {
           var r = el.getBoundingClientRect();
