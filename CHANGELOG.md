@@ -45,13 +45,11 @@ in [ROADMAP.md](ROADMAP.md).
 
 ### Fixed
 
-<<<<<<< HEAD
+- Sidebar: the insert line while dragging a pin or loose tab up or down lands on the open gap again — split members no longer leave empty index holes, the joint strip is not counted as a row, the mark hides at the home slot, and it settles with the parting rows.
 - Dragging a tab up or down in the sidebar (Essentials, Pinned, or loose) no longer freezes or trails the pointer: each chip keeps its own travel, so a move redraws that one tab instead of every square and row in the column (upstream `PinCarried` / `dedca00`, adapted for Essentials cross-zone morph).
-=======
 - A loading tab's ring turns without redrawing the window: Core Animation plays it on the render server instead of a SwiftUI `repeatForever` that laid out the whole tree every frame (upstream `0d5cd85`).
 - Scrolling no longer searches the page for a sign-in form on every frame: the form relay looks for password boxes only when the caret is in an input (upstream `3f414ac`).
 - Many tabs no longer make the strip slow to redraw: each tab's width is worked out once per pass and handed to every pill (upstream `83286cc`).
->>>>>>> 617fe23 (Port upstream tab-motion perf: Ring, forms scroll, strip width)
 - An overflowing top tab strip no longer freezes under a mouse wheel when Spaces are on: the wheel scrolls the tabs again, and Option+wheel still steps one space at a time. The old handler swallowed every notch inside a 0.3s throttle — tabs never moved, then a space jumped.
 - Essentials drag-to-morph no longer freezes or leaves floating ghost chips: carry/preview state clears without animation on drop or cancel, live morph skips matched-geometry and settle springs while the finger is down, and zone thresholds use hysteresis so slow in/out drags do not thrash the grid.
 - ⌘W on Essentials no longer wakes other put-down Essentials in a loop: putting down the last awake page (including the last awake Essential) closes the window, like a normal Mac app. Asleep Essentials stay put and are not re-selected.

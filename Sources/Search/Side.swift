@@ -346,7 +346,21 @@ struct SideBar: View {
 
     /// This space's pins only. Essentials have their own strip above the swipe.
     private var pinnedTabs: [Tab] { browser.tabs.filter { $0.pin != nil && !$0.essential } }
+    /// Pins that still draw as rows (split members live in the joint strip).
+    private var pinnedDragTabs: [Tab] { pinnedTabs.filter { !browser.isSplitMember($0) } }
     private var looseTabs: [Tab] { browser.tabs.filter { $0.pin == nil && !$0.essential } }
+
+    /// Pack zone+index so cross-zone parting with the same slot still settles.
+    private func settleToken(_ hint: DropHint?) -> Int? {
+        guard let hint else { return nil }
+        let zone: Int
+        switch hint.zone {
+        case .essentials: zone = 1
+        case .pinned: zone = 2
+        case .loose: zone = 3
+        }
+        return zone * 10_000 + hint.index
+    }
 
     /// Essentials fill the row, Zen-style: up to three equal cells.
     /// 1 → full width; 2 → half/half; 3 → thirds; past three wrap another row.
@@ -422,7 +436,7 @@ struct SideBar: View {
                             shadowRadius: 10,
                             shadowY: 3,
                             space: "essentials",
-                            settleOn: dropHint?.index,
+                            settleOn: settleToken(dropHint),
                             onChanged: { value, travel in
                                 essentialDragChanged(
                                     tab: tab,
@@ -476,7 +490,7 @@ struct SideBar: View {
     /// under the block separates pins from loose tabs — the #14 overlay bug
     /// does not apply: pins no longer share PinSquare geometry with anything.
     private var pinned: some View {
-        let tabs = pinnedTabs
+        let tabs = pinnedDragTabs
         let step = SideBar.row + SideBar.gap
         return VStack(alignment: .leading, spacing: 4) {
             Text("Pinned")
@@ -486,9 +500,6 @@ struct SideBar: View {
             ZStack(alignment: .topLeading) {
                 VStack(spacing: SideBar.gap) {
                     ForEach(Array(tabs.enumerated()), id: \.element.id) { index, tab in
-                        if browser.isSplitMember(tab) {
-                            EmptyView()
-                        } else {
                         let held = pinDragging == tab.id
                         let asEssential = held && dropHint?.zone == .essentials
                         SideRow(
@@ -512,7 +523,7 @@ struct SideBar: View {
                             shadowRadius: 12,
                             shadowY: 4,
                             space: "pins",
-                            settleOn: dropHint?.index,
+                            settleOn: settleToken(dropHint),
                             onChanged: { value, travel in
                                 pinnedRowDragChanged(
                                     tab: tab, index: index, step: step, count: tabs.count,
@@ -522,10 +533,10 @@ struct SideBar: View {
                             onEnded: { pinnedRowDragEnded(tab: tab) }
                         ))
                         .help("Pinned to this space")
-                        }
                     }
                 }
-                if let hint = dropHint, hint.zone == .pinned {
+                if let hint = dropHint, hint.zone == .pinned,
+                   !(dragZone == .pinned && hint.index == pinFrom) {
                     insertMark(at: hint.index, in: .pinned, columns: 1, width: 0, height: step)
                 }
             }
@@ -567,11 +578,13 @@ struct SideBar: View {
                 .allowsHitTesting(false)
         case .pinned, .loose:
             RoundedRectangle(cornerRadius: 1, style: .continuous)
-                .fill(Palette.ink.opacity(0.45))
+                .fill(Palette.ink.opacity(0.7))
                 .frame(height: 2)
                 .frame(maxWidth: .infinity)
                 .padding(.horizontal, 6)
                 .offset(y: CGFloat(index) * height - 1)
+                .zIndex(2)
+                .animation(Motion.settle, value: index)
                 .allowsHitTesting(false)
         }
     }
@@ -796,7 +809,14 @@ struct SideBar: View {
             } else if let hint, hint.zone == .loose {
                 browser.unpin(tab)
             } else if let hint, hint.zone == .pinned, hint.index != from {
-                browser.move(tab, to: hint.index)
+                // Same-zone indices are visual (split members omitted); map to tabs.
+                if dragZone == .pinned,
+                   pinnedDragTabs.indices.contains(hint.index),
+                   let at = browser.tabs.firstIndex(where: { $0.id == pinnedDragTabs[hint.index].id }) {
+                    browser.move(tab, to: at)
+                } else {
+                    browser.move(tab, to: min(hint.index, max(0, browser.spacePins - 1)))
+                }
             }
         }
         clearDrag()
@@ -822,9 +842,12 @@ struct SideBar: View {
             bumpHaptic(.loose)
         }
         // Drag out of the column → lift mini-window for edge split.
-        if abs(value.translation.width) > Metrics.splitLift,
-           abs(value.translation.width) > abs(value.translation.height) {
-            travel.wrappedValue = CGSize(width: 0, height: value.translation.height)
+        // Match TabBar: require a clearly horizontal stroke so vertical reorder
+        // jitter does not clear the insert line.
+        let dx = value.translation.width
+        let dy = value.translation.height
+        if abs(dx) > Metrics.splitLift, abs(dx) > abs(dy) * 1.1 {
+            travel.wrappedValue = CGSize(width: 0, height: dy)
             dropHint = nil
             browser.liftCarry(at: browser.splitCarry.point == .zero
                 ? CGPoint(x: Metrics.splitEdge + 8, y: 120)
@@ -884,10 +907,10 @@ struct SideBar: View {
                     browser.pin(tab)
                     browser.move(tab, to: min(hint.index, max(0, browser.spacePins - 1)))
                 } else if let hint, hint.zone == .loose, hint.index != from,
-                          loosePieces.indices.contains(hint.index) {
-                    if case .folder(let folder, _) = loosePieces[hint.index] {
+                          looseDragPieces.indices.contains(hint.index) {
+                    if case .folder(let folder, _) = looseDragPieces[hint.index] {
                         browser.place(tab, in: folder)
-                    } else if let dest = loosePieces[hint.index].tab,
+                    } else if let dest = looseDragPieces[hint.index].tab,
                               let at = browser.tabs.firstIndex(where: { $0.id == dest.id }) {
                         browser.move(tab, to: at)
                     }
@@ -899,8 +922,9 @@ struct SideBar: View {
     }
 
     private var loose: some View {
-        ZStack(alignment: .topLeading) {
-        VStack(spacing: SideBar.gap) {
+        let pieces = looseDragPieces
+        let step = SideBar.row + SideBar.gap
+        return VStack(spacing: SideBar.gap) {
             if let panes = browser.splitPanes {
                 SplitJointStrip(
                     browser: browser,
@@ -913,61 +937,61 @@ struct SideBar: View {
                 )
                 .padding(.bottom, 4)
             }
-            ForEach(Array(loosePieces.enumerated()), id: \.element.id) { index, piece in
-                switch piece {
-                case .folder(let folder, let members):
-                    FolderRow(browser: browser, folder: folder, members: members) {
-                        if let tab = browser.strip.first(where: { $0.id == browser.activeID }),
-                           tab.pin == nil, !tab.essential {
-                            browser.place(tab, in: folder)
+            // Mark sits in the row stack only so its Y ignores joint-strip height.
+            ZStack(alignment: .topLeading) {
+                VStack(spacing: SideBar.gap) {
+                    ForEach(Array(pieces.enumerated()), id: \.element.id) { index, piece in
+                        switch piece {
+                        case .folder(let folder, let members):
+                            FolderRow(browser: browser, folder: folder, members: members) {
+                                if let tab = browser.strip.first(where: { $0.id == browser.activeID }),
+                                   tab.pin == nil, !tab.essential {
+                                    browser.place(tab, in: folder)
+                                }
+                            }
+                        case .loose(let tab), .pin(let tab):
+                            let held = pinDragging == tab.id
+                            let asEssential = held && dropHint?.zone == .essentials
+                            let eCount = max(browser.essentials.count + 1, 1)
+                            SideRow(
+                                browser: browser,
+                                prefs: prefs,
+                                tab: tab,
+                                live: tab.id == browser.activeID,
+                                pill: pill,
+                                close: { browser.close(tab) },
+                                morph: held ? nil : morph,
+                                asEssential: asEssential,
+                                essentialWidth: pinWidth(for: eCount),
+                                essentialHeight: min(SideBar.square, pinWidth(for: eCount))
+                            )
+                            .modifier(SideCarried(
+                                tabID: tab.id,
+                                dragging: $pinDragging,
+                                parting: rowParting(index: index, step: step, zone: .loose),
+                                shadowOpacity: 0.14,
+                                shadowRadius: 12,
+                                shadowY: 4,
+                                space: "rows",
+                                settleOn: settleToken(dropHint),
+                                onChanged: { value, travel in
+                                    looseDragChanged(
+                                        tab: tab, index: index, step: step, count: pieces.count,
+                                        value: value, travel: travel
+                                    )
+                                },
+                                onEnded: { looseDragEnded(tab: tab) }
+                            ))
+                        case .essential:
+                            EmptyView()
                         }
                     }
-                case .loose(let tab), .pin(let tab):
-                    if browser.isSplitMember(tab) {
-                        EmptyView()
-                    } else {
-                        let step = SideBar.row + SideBar.gap
-                        let held = pinDragging == tab.id
-                        let asEssential = held && dropHint?.zone == .essentials
-                        let eCount = max(browser.essentials.count + 1, 1)
-                        SideRow(
-                            browser: browser,
-                            prefs: prefs,
-                            tab: tab,
-                            live: tab.id == browser.activeID,
-                            pill: pill,
-                            close: { browser.close(tab) },
-                            morph: held ? nil : morph,
-                            asEssential: asEssential,
-                            essentialWidth: pinWidth(for: eCount),
-                            essentialHeight: min(SideBar.square, pinWidth(for: eCount))
-                        )
-                        .modifier(SideCarried(
-                            tabID: tab.id,
-                            dragging: $pinDragging,
-                            parting: rowParting(index: index, step: step, zone: .loose),
-                            shadowOpacity: 0.14,
-                            shadowRadius: 12,
-                            shadowY: 4,
-                            space: "rows",
-                            settleOn: dropHint?.index,
-                            onChanged: { value, travel in
-                                looseDragChanged(
-                                    tab: tab, index: index, step: step, count: loosePieces.count,
-                                    value: value, travel: travel
-                                )
-                            },
-                            onEnded: { looseDragEnded(tab: tab) }
-                        ))
-                    }
-                case .essential:
-                    EmptyView()
+                }
+                if let hint = dropHint, hint.zone == .loose,
+                   !(dragZone == .loose && hint.index == pinFrom) {
+                    insertMark(at: hint.index, in: .loose, columns: 1, width: 0, height: step)
                 }
             }
-        }
-        if let hint = dropHint, hint.zone == .loose {
-            insertMark(at: hint.index, in: .loose, columns: 1, width: 0, height: SideBar.row + SideBar.gap)
-        }
         }
         .coordinateSpace(name: "rows")
     }
@@ -979,6 +1003,14 @@ struct SideBar: View {
             case .loose, .folder: return true
             default: return false
             }
+        }
+    }
+
+    /// Loose rows that still draw (split members live in the joint strip above).
+    private var looseDragPieces: [StripPiece] {
+        loosePieces.filter { piece in
+            guard let tab = piece.tab else { return true }
+            return !browser.isSplitMember(tab)
         }
     }
 
