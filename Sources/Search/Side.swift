@@ -588,12 +588,14 @@ struct SideBar: View {
                 )
                 .allowsHitTesting(false)
         case .pinned, .loose:
-            RoundedRectangle(cornerRadius: 1, style: .continuous)
-                .fill(Palette.ink.opacity(0.7))
-                .frame(height: 2)
+            // A clear “drop here” rule — taller/darker than a hairline so a
+            // slow 3–4 slot reorder still reads the destination while siblings part.
+            RoundedRectangle(cornerRadius: 1.5, style: .continuous)
+                .fill(Palette.ink.opacity(0.88))
+                .frame(height: 3)
                 .frame(maxWidth: .infinity)
-                .padding(.horizontal, 6)
-                .offset(y: CGFloat(index) * height - 1)
+                .padding(.horizontal, 4)
+                .offset(y: CGFloat(index) * height - 1.5)
                 .zIndex(2)
                 .animation(Motion.settle, value: index)
                 .allowsHitTesting(false)
