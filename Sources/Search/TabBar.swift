@@ -72,9 +72,13 @@ struct TabBar: View {
                             } else {
                                 ScrollViewReader { reader in
                                     ScrollView(.horizontal, showsIndicators: false) {
+                                        // Every tab's width, worked out once for the run
+                                        // rather than by every tab (upstream `83286cc`).
+                                        let each = width(in: geo.size.width)
+                                        let room = geo.size.width - Metrics.lights - 12
                                         HStack(spacing: Metrics.tabGap) {
                                             ForEach(Array(browser.spaceShownPieces.enumerated()), id: \.element.id) { index, piece in
-                                                spaceItem(piece, index: index, width: width(in: geo.size.width), room: geo.size.width - Metrics.lights - 12, pill: pill)
+                                                spaceItem(piece, index: index, width: each, room: room, pill: pill)
                                                     .id(piece.id)
                                             }
                                         }
@@ -199,6 +203,8 @@ struct TabBar: View {
     /// reappear when the space row does.
     @ViewBuilder
     private func essentialsStrip(in strip: CGFloat, pill: Namespace.ID) -> some View {
+        let each = width(in: strip)
+        let room = strip - Metrics.lights - 12
         HStack(spacing: Metrics.tabGap) {
             ForEach(Array(browser.essentials.enumerated()), id: \.element.id) { index, tab in
                 let step = Metrics.pinWidth + Metrics.tabGap
@@ -207,8 +213,8 @@ struct TabBar: View {
                     prefs: browser.prefs,
                     tab: tab,
                     live: tab.id == browser.activeID,
-                    width: width(in: strip),
-                    room: strip - Metrics.lights - 12,
+                    width: each,
+                    room: room,
                     pill: pill,
                     close: { browser.close(tab) }
                 )
@@ -1162,24 +1168,79 @@ struct MiddleClick: NSViewRepresentable {
 
 /// An almost-closed ring, turning — the same one the canvas app uses, small
 /// enough to sit inside a tab without becoming the loudest thing in it.
-struct Ring: View {
+///
+/// Turned by Core Animation rather than SwiftUI. A SwiftUI animation that
+/// never ends has the whole window's view tree laid out and redrawn every
+/// frame for as long as it runs — a fifth of a core, all the while a page
+/// in some tab behind was still loading. A layer's own animation is played
+/// by the render server and costs this process nothing. (Upstream `0d5cd85`.)
+struct Ring: NSViewRepresentable {
     var size: CGFloat = 10
-    @State private var angle: Double = 0
 
-    var body: some View {
-        Circle()
-            .trim(from: 0, to: 0.78)
-            .stroke(
-                Palette.muted.opacity(0.7),
-                style: StrokeStyle(lineWidth: 1.4, lineCap: .round)
-            )
-            .frame(width: size, height: size)
-            .rotationEffect(.degrees(angle))
-            .onAppear {
-                withAnimation(.linear(duration: 0.85).repeatForever(autoreverses: false)) {
-                    angle = 360
-                }
+    func makeNSView(context: Context) -> RingView { RingView() }
+    func updateNSView(_ view: RingView, context: Context) {}
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: RingView, context: Context) -> CGSize? {
+        CGSize(width: size, height: size)
+    }
+
+    final class RingView: NSView {
+        private let ring = CAShapeLayer()
+
+        override init(frame: NSRect) {
+            super.init(frame: frame)
+            wantsLayer = true
+            ring.fillColor = nil
+            ring.lineWidth = 1.4
+            ring.lineCap = .round
+            ring.strokeEnd = 0.78
+            // Nothing but the turn moves: a new size or colour is there at
+            // once, not eased into by Core Animation's own quarter second.
+            ring.actions = ["bounds": NSNull(), "position": NSNull(), "path": NSNull(), "strokeColor": NSNull()]
+            layer?.addSublayer(ring)
+        }
+
+        required init?(coder: NSCoder) { nil }
+
+        /// Seen, never pressed: it sits in a tab, over the × while the page
+        /// loads and in the middle of a tab down to its mark, and a real view
+        /// would take the click meant for either.
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+        override func layout() {
+            super.layout()
+            let inset = ring.lineWidth / 2
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            ring.frame = bounds
+            ring.path = CGPath(ellipseIn: bounds.insetBy(dx: inset, dy: inset), transform: nil)
+            CATransaction.commit()
+        }
+
+        /// The colour is resolved against the window's appearance, so it is
+        /// set again whenever that changes.
+        override func viewDidChangeEffectiveAppearance() {
+            super.viewDidChangeEffectiveAppearance()
+            effectiveAppearance.performAsCurrentDrawingAppearance {
+                ring.strokeColor = Palette.NS.muted.withAlphaComponent(0.7).cgColor
             }
+        }
+
+        /// Turning only while it is in a window: a layer animation is dropped
+        /// when the view leaves one, so it is added each time it arrives.
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            viewDidChangeEffectiveAppearance()
+            ring.removeAnimation(forKey: "turn")
+            guard window != nil else { return }
+            let turn = CABasicAnimation(keyPath: "transform.rotation.z")
+            // Clockwise, as the SwiftUI one turned: a layer's positive angle
+            // is anticlockwise in a view that isn't flipped.
+            turn.fromValue = 0
+            turn.toValue = -2 * Double.pi
+            turn.duration = 0.85
+            turn.repeatCount = .infinity
+            ring.add(turn, forKey: "turn")
+        }
     }
 }
 
