@@ -45,6 +45,7 @@ in [ROADMAP.md](ROADMAP.md).
 
 ### Fixed
 
+- Dragging a tab up or down in the sidebar (Essentials, Pinned, or loose) no longer freezes or trails the pointer: each chip keeps its own travel, so a move redraws that one tab instead of every square and row in the column (upstream `PinCarried` / `dedca00`, adapted for Essentials cross-zone morph).
 - An overflowing top tab strip no longer freezes under a mouse wheel when Spaces are on: the wheel scrolls the tabs again, and Option+wheel still steps one space at a time. The old handler swallowed every notch inside a 0.3s throttle — tabs never moved, then a space jumped.
 - Essentials drag-to-morph no longer freezes or leaves floating ghost chips: carry/preview state clears without animation on drop or cancel, live morph skips matched-geometry and settle springs while the finger is down, and zone thresholds use hysteresis so slow in/out drags do not thrash the grid.
 - ⌘W on Essentials no longer wakes other put-down Essentials in a loop: putting down the last awake page (including the last awake Essential) closes the window, like a normal Mac app. Asleep Essentials stay put and are not re-selected.
