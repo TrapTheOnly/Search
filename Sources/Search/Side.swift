@@ -348,7 +348,18 @@ struct SideBar: View {
     private var pinnedTabs: [Tab] { browser.tabs.filter { $0.pin != nil && !$0.essential } }
     /// Pins that still draw as rows (split members live in the joint strip).
     private var pinnedDragTabs: [Tab] { pinnedTabs.filter { !browser.isSplitMember($0) } }
+    /// Drawn pin rows — mark / parting / zone geometry use this, not `spacePins`.
+    private var pinnedVisualCount: Int { pinnedDragTabs.count }
     private var looseTabs: [Tab] { browser.tabs.filter { $0.pin == nil && !$0.essential } }
+
+    /// Visual pin insert index → `tabs` index. `nil` means append after last visual pin.
+    /// Call before `pin` / `removeEssential` so the snapshot matches the mark.
+    private func pinModelIndex(forVisual hintIndex: Int) -> Int? {
+        let visual = pinnedDragTabs
+        if hintIndex >= visual.count { return nil }
+        guard visual.indices.contains(hintIndex) else { return nil }
+        return browser.tabs.firstIndex(where: { $0.id == visual[hintIndex].id })
+    }
 
     /// Pack zone+index so cross-zone parting with the same slot still settles.
     private func settleToken(_ hint: DropHint?) -> Int? {
@@ -708,10 +719,11 @@ struct SideBar: View {
         let leaving = dropHint?.zone != .essentials && dropHint != nil
         let leaveY = blockH + (leaving ? 4 : 16)
         if value.location.y > leaveY {
-            let intoPins = value.location.y < blockH + 12 + CGFloat(max(1, browser.spacePins)) * (SideBar.row + SideBar.gap) + 40
+            let visualPins = pinnedVisualCount
+            let intoPins = value.location.y < blockH + 12 + CGFloat(max(1, visualPins)) * (SideBar.row + SideBar.gap) + 40
             if intoPins || browser.spacePins > 0 {
                 let idx = max(0, Int(((value.location.y - blockH - 12) / (SideBar.row + SideBar.gap)).rounded()))
-                let next = DropHint(zone: .pinned, index: min(idx, browser.spacePins))
+                let next = DropHint(zone: .pinned, index: min(idx, visualPins))
                 if dropHint != next { dropHint = next }
                 bumpHaptic(.pinned)
             } else {
@@ -738,9 +750,15 @@ struct SideBar: View {
         // clearing dropHint inside withAnimation orphans morph layers.
         withAnimation(Motion.settle) {
             if let hint, hint.zone == .pinned {
+                // Capture visual→model before removeEssential (attaches at 0).
+                let at = pinModelIndex(forVisual: hint.index)
                 browser.removeEssential(tab)
-                // removeEssential attaches as pin at 0; move to hint.
-                browser.move(tab, to: min(hint.index, max(0, browser.spacePins - 1)))
+                if let at {
+                    browser.move(tab, to: at)
+                } else {
+                    // Append after last visual pin.
+                    browser.move(tab, to: max(0, browser.spacePins - 1))
+                }
             } else if let hint, hint.zone == .loose {
                 browser.unpin(tab)
             } else if let hint, hint.zone == .essentials, hint.index != from {
@@ -810,12 +828,9 @@ struct SideBar: View {
                 browser.unpin(tab)
             } else if let hint, hint.zone == .pinned, hint.index != from {
                 // Same-zone indices are visual (split members omitted); map to tabs.
-                if dragZone == .pinned,
-                   pinnedDragTabs.indices.contains(hint.index),
-                   let at = browser.tabs.firstIndex(where: { $0.id == pinnedDragTabs[hint.index].id }) {
+                // No visual→model fallback — bare hint.index is not model space.
+                if let at = pinModelIndex(forVisual: hint.index) {
                     browser.move(tab, to: at)
-                } else {
-                    browser.move(tab, to: min(hint.index, max(0, browser.spacePins - 1)))
                 }
             }
         }
@@ -860,7 +875,8 @@ struct SideBar: View {
         }
         // Above the loose list → pinned, or further → essentials.
         if value.location.y < -8 {
-            let pinBlock = CGFloat(max(1, browser.spacePins)) * step + 20
+            let visualPins = pinnedVisualCount
+            let pinBlock = CGFloat(max(1, visualPins)) * step + 20
             let inEssentials = dropHint?.zone == .essentials
             let essentialsY = -8 - pinBlock + (inEssentials ? 10 : 0)
             if value.location.y < essentialsY {
@@ -871,10 +887,10 @@ struct SideBar: View {
                 bumpHaptic(.essentials)
             } else {
                 travel.wrappedValue = CGSize(width: 0, height: value.translation.height)
-                // y is negative above the loose list; map onto pin slots.
+                // y is negative above the loose list; map onto visual pin slots.
                 let fromBottom = (-value.location.y - 8) / step
-                let idx = max(0, browser.spacePins - Int(fromBottom.rounded()))
-                let next = DropHint(zone: .pinned, index: min(max(0, idx), browser.spacePins))
+                let idx = max(0, visualPins - Int(fromBottom.rounded()))
+                let next = DropHint(zone: .pinned, index: min(max(0, idx), visualPins))
                 if dropHint != next { dropHint = next }
                 bumpHaptic(.pinned)
             }
@@ -904,8 +920,10 @@ struct SideBar: View {
                     browser.makeEssential(tab)
                     browser.movePin(tab, to: hint.index)
                 } else if let hint, hint.zone == .pinned {
+                    // Capture before pin() (lands at end of pin block).
+                    let at = pinModelIndex(forVisual: hint.index)
                     browser.pin(tab)
-                    browser.move(tab, to: min(hint.index, max(0, browser.spacePins - 1)))
+                    if let at { browser.move(tab, to: at) }
                 } else if let hint, hint.zone == .loose, hint.index != from,
                           looseDragPieces.indices.contains(hint.index) {
                     if case .folder(let folder, _) = looseDragPieces[hint.index] {
